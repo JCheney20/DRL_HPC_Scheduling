@@ -1,0 +1,38 @@
+# =============================================================================
+# config.smoke.yaml — Smoke Test Configuration
+# =============================================================================
+# Minimal config for fast end-to-end pipeline validation.
+# Usage: snakemake --configfile config.smoke.yaml
+# =============================================================================
+
+# --- Trace -------------------------------------------------------------------
+trace_name: "physical_job"
+
+# --- Seeds -------------------------------------------------------------------
+seeds: [42, 123, 456]                   # 2 seeds sufficient for smoke
+
+# --- Algorithms --------------------------------------------------------------
+algorithms:
+  - "ppo"
+  - "maskable_a2c"
+  - "maskable_dqn"
+
+# --- Training hyperparameters ------------------------------------------------
+save_interval: 1000
+total_saving: 1                    # total timesteps = 500 * 2 = 1000
+window_size: 512
+tail_size: 64
+buffer_size: 512
+
+# --- Topology ----------------------------------------------------------------
+topology_file: "physical_topology.txt"
+node_file: "nodes.csv"
+
+# --- Statistical test parameters ---------------------------------------------
+alpha: 0.05
+bootstrap_reps: 100                # reduced for speed
+bootstrap_seed: 42
+
+# --- Evaluation --------------------------------------------------------------
+eval_deterministic: true
+eval_max_steps: 500                # early stop for smoke

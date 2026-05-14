@@ -1,0 +1,42 @@
+# =============================================================================
+# config.yaml — DRLScheduler Pipeline Configuration
+# =============================================================================
+# Usage:
+#   Full run:   snakemake --configfile config.yaml
+#   Smoke test: snakemake --configfile config.smoke.yaml
+# =============================================================================
+
+# --- Trace -------------------------------------------------------------------
+trace_name: "physical_job"         # "physical_job" | "deep_learn"
+
+# --- Seeds -------------------------------------------------------------------
+seeds: [210169, 250564, 20603, 170797, 21095]   # 5 seeds for production
+
+# --- Algorithms --------------------------------------------------------------
+algorithms:
+  - "ppo"
+  - "a2c"
+  - "dqn"
+  - "maskable_ppo"
+  - "maskable_a2c"
+  - "maskable_dqn"
+
+# --- Training hyperparameters ------------------------------------------------
+save_interval: 100000
+total_saving: 100                  # total timesteps = save_interval * total_saving
+window_size: 512
+tail_size: 64
+buffer_size: 512
+
+# --- Topology ----------------------------------------------------------------
+topology_file: "physical_topology.txt" # "physical" | "deep_learn"
+node_file: "nodes.csv"
+
+# --- Statistical test parameters ---------------------------------------------
+alpha: 0.05
+bootstrap_reps: 10000
+bootstrap_seed: 42
+
+# --- Evaluation --------------------------------------------------------------
+eval_deterministic: true
+eval_max_steps: null               # null = full episode; integer = early stop

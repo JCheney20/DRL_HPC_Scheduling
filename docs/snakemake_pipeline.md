@@ -60,7 +60,11 @@ This file documents the DAG contract used for local and HPC execution.
 ## 5. Profiles
 
 - local profile path:
+<<<<<<< HEAD
 - hpc profile path:
+=======
+- hpc profile path (Slurm):
+>>>>>>> e7ed95b (update:ver1.1)
 - cluster submit command:
 
 ## 6. Failure and Resume Policy
@@ -82,4 +86,8 @@ This file documents the DAG contract used for local and HPC execution.
 snakemake -n
 snakemake --cores 4
 snakemake --config mode=smoke
+<<<<<<< HEAD
+=======
+snakemake --profile profiles/slurm --config mode=full
+>>>>>>> e7ed95b (update:ver1.1)
 ```

@@ -30,8 +30,13 @@ Use this template to record selector-only smoke evidence in a consistent, audit-
 
 | test | command | expected result | actual result | status |
 |---|---|---|---|---|
+<<<<<<< HEAD
 | negative holdout guard | `python train_agents.py --algo maskable_dqn --trace splits/<name>_holdout30.tsv --save_interval 1000 --total_saving 1 --seed <seed>` | fail-fast before env setup with holdout error | | |
 | positive dev start | `python train_agents.py --algo maskable_dqn --trace splits/<name>_dev70.tsv --save_interval 1000 --total_saving 1 --seed <seed> --buffer-size <small>` | starts env setup/training normally | | |
+=======
+| negative holdout guard | `python src/train_agents.py --algo maskable_dqn --trace splits/<name>_holdout30.tsv --save_interval 1000 --total_saving 1 --seed <seed>` | fail-fast before env setup with holdout error | | |
+| positive dev start | `python src/train_agents.py --algo maskable_dqn --trace splits/<name>_dev70.tsv --save_interval 1000 --total_saving 1 --seed <seed> --buffer-size <small>` | starts env setup/training normally | | |
+>>>>>>> e7ed95b (update:ver1.1)
 
 ## 4. Smoke Matrix Evidence
 

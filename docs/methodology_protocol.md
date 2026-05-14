@@ -29,8 +29,13 @@ Use this file as the canonical methodology specification for Submission 2.
 | Algorithm | Family | Masking | Implementation package | Notes |
 |---|---|---|---|---|
 | MaskablePPO | Policy gradient | Yes | sb3-contrib | |
+<<<<<<< HEAD
 | MaskableA2C | Actor-critic | Yes | local (`github_repos/herasched/src/`) | custom implementation |
 | MaskableDQN | Value-based | Yes | local (`github_repos/herasched/src/`) | custom implementation |
+=======
+  | MaskableA2C | Actor-critic | Yes | local (`src/`) | custom implementation |
+  | MaskableDQN | Value-based | Yes | local (`src/`) | custom implementation |
+>>>>>>> e7ed95b (update:ver1.1)
 | PPO | Policy gradient | No | stable-baselines3 | |
 | A2C | Actor-critic | No | stable-baselines3 | |
 | DQN | Value-based | No | stable-baselines3 | |
@@ -60,7 +65,11 @@ Use this file as the canonical methodology specification for Submission 2.
 ### Command Template
 
 ```bash
+<<<<<<< HEAD
 python train_agents.py --algo <algo> --trace splits/<trace>_dev70.tsv --seed <seed> --save_interval <n> --total_saving <k>
+=======
+python src/train_agents.py --algo <algo> --trace splits/<trace>_dev70.tsv --seed <seed> --save_interval <n> --total_saving <k>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 Note for DQN smoke on high-dimensional dict observations:
@@ -77,7 +86,11 @@ Note for DQN smoke on high-dimensional dict observations:
 ### Command Template
 
 ```bash
+<<<<<<< HEAD
 python evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
+=======
+python src/evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ## 7. Metrics
@@ -105,6 +118,7 @@ python evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
 
 Sequence:
 
+<<<<<<< HEAD
 1. Shapiro-Wilk
 2. Friedman
 3. Nemenyi
@@ -112,11 +126,29 @@ Sequence:
 5. bootstrap 95% CI
 6. CD diagram inputs
 7. Pareto analysis
+=======
+1. Shapiro-Wilk (diagnostic only; low power at small n)
+2. Friedman (omnibus)
+3. Conover (post-hoc)
+4. Kendall's W (effect size)
+5. Vargha-Delaney A (pairwise effect size)
+6. bootstrap 95% CI
+7. CD diagram inputs
+8. Pareto analysis
+
+Notes:
+
+- Friedman is sometimes critiqued for low power, but can be adequate when the number of groups is five or more (Mangiafico). Alternative higher-power options (Quade, ART ANOVA) are considered optional extensions rather than core pipeline steps.
+>>>>>>> e7ed95b (update:ver1.1)
 
 ### Command Template
 
 ```bash
+<<<<<<< HEAD
 python statistical_tests.py --input <aggregate_csv> --output <analysis_dir>
+=======
+python src/statistical_test.py --input <aggregate_csv> --output <analysis_dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ## 9. Output Contracts

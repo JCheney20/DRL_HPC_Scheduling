@@ -21,6 +21,10 @@ This file defines the migration path from local validated workflow to cluster ex
 - Nix environment used on cluster
 - package versions pinned
 - command-line interface consistent with local workflow
+<<<<<<< HEAD
+=======
+- Apptainer image built from Nix flake (container path recorded in run metadata)
+>>>>>>> e7ed95b (update:ver1.1)
 
 ## 4. Job Plan
 
@@ -41,13 +45,28 @@ This file defines the migration path from local validated workflow to cluster ex
 snakemake --profile <hpc_profile> --cores <n>
 ```
 
+<<<<<<< HEAD
+=======
+Suggested profile layout:
+
+- `profiles/slurm/config.yaml`
+- `profiles/slurm/slurm-submit.py`
+- `profiles/slurm/cluster-config.yaml`
+
+>>>>>>> e7ed95b (update:ver1.1)
 or, if running script-by-script:
 
 ```bash
 python train_batch.py --split <split_id> --timesteps <steps> --output <dir>
+<<<<<<< HEAD
 python evaluate_agents.py --split <split_id> --output <dir>
 python aggregate_results.py --input <dir> --output <dir>
 python statistical_tests.py --input <summary_csv> --output <analysis_dir>
+=======
+python src/evaluate_agents.py --split <split_id> --output <dir>
+python src/aggregate_results.py --input <dir> --output <dir>
+python src/statistical_test.py --input <summary_csv> --output <analysis_dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ## 7. Monitoring and Logging

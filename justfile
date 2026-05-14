@@ -1,0 +1,178 @@
+# =============================================================================
+# justfile — DRLScheduler Pipeline Commands
+# =============================================================================
+# Usage: just <target>
+# Example: just run_smoke
+# Example: just run_full TRACE=deep_learn
+# Ref: https://just.systems/man/en/
+# =============================================================================
+
+# Auto-detect CPU count (varies by OS)
+cpu_count := if os() == "linux" {
+    `nproc`
+} else if os() == "macos" {
+    `sysctl -n hw.ncpu`
+} else {
+    "4"
+}
+
+# Trace name override (just run_full TRACE=deep_learn)
+TRACE := env_var_or_default("TRACE", "physical_job")
+
+# =============================================================================
+# HELP
+# =============================================================================
+
+@help:
+    echo "DRLScheduler Snakemake Pipeline — justfile Targets"
+    echo ""
+    echo "PIPELINE TARGETS:"
+    echo "  dry_run_smoke        - Validate smoke DAG without execution"
+    echo "  dry_run              - Validate production DAG without execution"
+    echo "  run_smoke            - Smoke test (fast end-to-end validation)"
+    echo "  run_full             - Full production pipeline (train → eval → aggregate → stats)"
+    echo "  run_full_with_base   - Full pipeline + baseline comparison"
+    echo "  run_baseline         - Run baseline scheduler only"
+    echo "  test_stats           - Test statistical_test.py on synthetic data"
+    echo ""
+    echo "DAG EXPORT TARGETS:"
+    echo "  export_dag           - Export both detail + overview DAGs"
+    echo "  export_dag_detail    - Export job-level DAG (detailed)"
+    echo "  export_dag_overview  - Export rule-level DAG (clean)"
+    echo ""
+    echo "MAINTENANCE:"
+    echo "  clean                - Remove all outputs except data and logs"
+    echo "  clean_all            - Remove all outputs including logs"
+    echo "  nix_develop          - Enter Nix shell"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  just run_smoke                         # Quick smoke test on physical_job"
+    echo "  just run_full                          # Full run on physical_job"
+    echo "  just run_full TRACE=deep_learn         # Full run on deep_learn"
+    echo "  just export_dag                        # Export DAGs before running"
+    echo "  just dry_run_smoke                     # Check DAG resolves correctly"
+    echo ""
+
+# =============================================================================
+# VALIDATION TARGETS
+# =============================================================================
+
+@dry_run_smoke:
+    echo "Validating smoke DAG (no execution)..."
+    snakemake --configfile config.smoke.yaml --dry-run --quiet
+
+@dry_run:
+    echo "Validating production DAG (no execution)..."
+    snakemake --configfile config.yaml --dry-run --quiet
+
+# =============================================================================
+# PIPELINE TARGETS
+# =============================================================================
+
+@run_smoke:
+    echo "Running smoke test pipeline on {{TRACE}}..."
+    echo "Config: config.smoke.yaml (2 seeds, 1000 timesteps, max-steps=500)"
+    snakemake \
+        --configfile config.smoke.yaml \
+        --config trace_name={{TRACE}} \
+        --cores {{cpu_count}} 
+    echo "✓ Smoke test complete. Outputs in result/{{TRACE}}/"
+
+@run_full:
+    echo "Running full production pipeline on {{TRACE}}..."
+    echo "Config: config.yaml (5 seeds, 10M timesteps)"
+    snakemake \
+        --configfile config.yaml \
+        --config trace_name={{TRACE}} \
+        --cores {{cpu_count}}
+    echo "✓ Full pipeline complete. Outputs in result/{{TRACE}}/"
+
+@run_full_with_base:
+    echo "Running full pipeline with baseline on {{TRACE}}..."
+    snakemake \
+        --configfile config.yaml \
+        --config trace_name={{TRACE}} \
+        result/{{TRACE}}/stats/stats_summary.json \
+        result/{{TRACE}}/baseline/baseline_metadata.json \
+        --cores {{cpu_count}}
+    echo "✓ Full pipeline + baseline complete."
+
+@run_baseline:
+    echo "Running baseline scheduler (FCFS + best_fit) on {{TRACE}}..."
+    snakemake \
+        --configfile config.yaml \
+        --config trace_name={{TRACE}} \
+        result/{{TRACE}}/baseline/baseline_metadata.json \
+        --cores {{cpu_count}}
+    echo "✓ Baseline complete. Outputs in result/{{TRACE}}/baseline/"
+
+@test_stats:
+    echo "Generating synthetic seed summary..."
+    echo "Stats smoke test requires src/scripts/generate_synthetic_seed_summary.py"
+    echo "TODO: add the script, then re-enable this target"
+
+# =============================================================================
+# DAG EXPORT TARGETS
+# =============================================================================
+
+@export_dag_detail:
+    echo "Exporting job-level DAG for {{TRACE}}..."
+    mkdir -p plots
+    snakemake --configfile config.yaml --config trace_name={{TRACE}} --dag \
+        | dot -Tsvg \
+            -Grankdir=LR \
+            -Gsplines=polyline \
+            -Nshape=box \
+            -Nstyle=rounded \
+            -Efontsize=10 \
+        -o plots/{{TRACE}}_dag_detail.dot
+    echo "✓ Job DAG exported to plots/{{TRACE}}_dag_detail.svg"
+
+@export_dag_overview:
+    echo "Exporting rule-level DAG for {{TRACE}}..."
+    mkdir -p plots
+    snakemake --configfile config.yaml --config trace_name={{TRACE}} --rulegraph \
+        | dot -Tsvg \
+            -Grankdir=LR \
+            -Gsplines=polyline \
+            -Nshape=box \
+            -Nstyle=rounded \
+            -Efontsize=10 \
+        -o plots/{{TRACE}}_dag_overview.dot
+    echo "✓ Rule DAG exported to plots/{{TRACE}}_dag_overview.svg"
+
+@export_dag:
+    just export_dag_detail
+    just export_dag_overview
+    echo "✓ Both DAGs exported to plots/"
+    echo "  - plots/{{TRACE}}_dag_detail.svg   (job-level; for appendix)"
+    echo "  - plots/{{TRACE}}_dag_overview.svg (rule-level; for methodology)"
+
+# =============================================================================
+# MAINTENANCE TARGETS
+# =============================================================================
+
+@clean:
+    echo "Cleaning pipeline outputs (data, code, and logs preserved)..."
+    rm -rf result/ trained_model/ .snakemake/
+    echo "✓ Clean complete"
+
+@clean_all:
+    echo "Cleaning all outputs including logs..."
+    rm -rf result/ trained_model/ .snakemake/ logs/run_log.csv logs/snakemake/
+    echo "✓ Full clean complete"
+
+@nix_develop:
+    echo "Entering Nix develop environment..."
+    nix develop
+
+# =============================================================================
+# NOTES
+# =============================================================================
+# Environment:      Nix (nix develop required before running)
+# Snakemake:        9.4.3+
+# just:             https://just.systems/man/en/
+#
+# TODO (future): Add Slurm profile for HPC cluster submission
+# TODO (future): Add Conda support as alternative to Nix
+# =============================================================================

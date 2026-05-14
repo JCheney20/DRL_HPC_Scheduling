@@ -17,7 +17,11 @@ This file documents the local execution workflow from smoke checks to analysis.
 ## 3. Environment Setup
 
 ```bash
+<<<<<<< HEAD
 cd github_repos/herasched
+=======
+cd Project_Github
+>>>>>>> e7ed95b (update:ver1.1)
 nix develop
 ```
 
@@ -38,7 +42,11 @@ Expected outputs:
 ### Step 1: Guard Test (Holdout Rejection)
 
 ```bash
+<<<<<<< HEAD
 python train_agents.py \
+=======
+python src/train_agents.py \
+>>>>>>> e7ed95b (update:ver1.1)
   --algo maskable_dqn \
   --name smoke_guard_should_fail \
   --trace splits/physical_job_holdout30.tsv \
@@ -52,7 +60,11 @@ Expected behavior: fail-fast before environment setup with holdout guard error.
 ### Step 2: Smoke Train (Interim Maskable Gate, 1k steps)
 
 ```bash
+<<<<<<< HEAD
 python train_agents.py \
+=======
+python src/train_agents.py \
+>>>>>>> e7ed95b (update:ver1.1)
   --algo maskable_a2c \
   --name smoke_a2c_mask_on \
   --trace splits/physical_job_dev70.tsv \
@@ -61,7 +73,11 @@ python train_agents.py \
   --total_saving 1 \
   --seed 123456
 
+<<<<<<< HEAD
 python train_agents.py \
+=======
+python src/train_agents.py \
+>>>>>>> e7ed95b (update:ver1.1)
   --algo maskable_dqn \
   --name smoke_dqn_mask_on \
   --trace splits/physical_job_dev70.tsv \
@@ -71,7 +87,11 @@ python train_agents.py \
   --seed 123456 \
   --buffer-size 2000
 
+<<<<<<< HEAD
 python train_agents.py \
+=======
+python src/train_agents.py \
+>>>>>>> e7ed95b (update:ver1.1)
   --algo maskable_dqn \
   --name smoke_dqn_mask_off \
   --trace splits/physical_job_dev70.tsv \
@@ -85,19 +105,31 @@ python train_agents.py \
 ### Step 3: Smoke Evaluate
 
 ```bash
+<<<<<<< HEAD
 python evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
+=======
+python src/evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ### Step 4: Aggregate
 
 ```bash
+<<<<<<< HEAD
 python aggregate_results.py --input <metrics_dir> --output <summary_dir>
+=======
+python src/aggregate_results.py --input <metrics_dir> --output <summary_dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ### Step 5: Stats Sanity
 
 ```bash
+<<<<<<< HEAD
 python statistical_tests.py --input <summary_csv> --output <analysis_dir>
+=======
+python src/statistical_test.py --input <summary_csv> --output <analysis_dir>
+>>>>>>> e7ed95b (update:ver1.1)
 ```
 
 ## 5. Smoke Gate Checklist
