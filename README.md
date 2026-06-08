@@ -1,8 +1,6 @@
-# DRL HPC Scheduling
+# DRL Scheduler Statistical Testbed
 
-Imperative Analysis through Reproducible Pipelines
-
-This repository provides an end-to-end, reproducible pipeline to train, evaluate, aggregate, and statistically compare deep reinforcement learning (DRL) schedulers for heterogeneous HPC workloads. The workflow targets six DRL algorithms across three families (PPO, A2C, DQN) and their maskable variants, with time-aware data splits and a non-parametric statistical analysis suite.
+This repository is a reproducible statistical testing environment for deep reinforcement learning (DRL) job schedulers in heterogeneous HPC settings. It provides an end-to-end pipeline to train, evaluate, aggregate, and statistically compare six DRL algorithms (PPO, A2C, DQN) and their maskable variants, with time-aware data splits and a non-parametric analysis suite.
 
 The implementation is Nix-first. For cluster execution, the same environment is intended to be containerized with Apptainer (see `docs/workflow_hpc.md`).
 
@@ -36,8 +34,8 @@ just run_full TRACE=deep_learn
 Direct script entrypoints:
 
 ```bash
-python src/make_split.py --src physical_job
-python src/train_agents.py --algo maskable_a2c --trace splits/physical_job_dev70.tsv --seed 123456 --save_interval 1000 --total_saving 1
+python src/make_split.py --source physical_job --out-dir data/splits/
+python src/train_agents.py --algo maskable_a2c --trace data/splits/physical_job_dev70.tsv --seed 123456 --save_interval 1000 --total_saving 1
 python src/evaluate_agents.py --manifest logs/run_log.csv --output-dir result/physical_job/eval_runs
 python src/aggregate_results.py --manifest logs/run_log.csv --eval-root result/physical_job/eval_runs/runs --output-dir result/physical_job/aggregate
 python src/statistical_test.py --input result/physical_job/aggregate/seed_summary.csv --output-dir result/physical_job/stats
@@ -62,11 +60,28 @@ Project_Github/
 
 When results land, this section will link to the generated artefacts and the evidence map in `docs/submission2_evidence_map.md`.
 
-## Key Resources (Citations Pending)
+## What This Repo Is (and Is Not)
 
-- HPCSim environment (Wang et al.)
-- stable-baselines3 (PPO, A2C, DQN)
-- sb3-contrib (MaskablePPO)
+- This repo is a reproducible statistical testing environment for DRL job schedulers.
+- It is not a production scheduler or a benchmark leaderboard.
+- It focuses on transparent pipelines, fixed splits, and auditable statistics.
+
+## Data Access
+
+The HPCSim environment and Slurm traces originate from Wang et al. The canonical source is the HPCSim repository and dataset release:
+
+- https://gitlab.unimelb.edu.au/lingfeiw/herasched
+
+Use this link for trace acquisition details and upstream documentation.
+
+## Citations
+
+If you use this repository, cite:
+
+- Wang et al. for the Slurm traces and HPCSim environment (bib key: `Wang2025_1`).
+- Stable-Baselines3 for PPO/A2C/DQN implementations (bib key: `stable-baselines3`).
+
+Citation entries live in `Submmisions/bibliography.bib`.
 
 ## Documentation Index
 

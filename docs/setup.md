@@ -35,29 +35,13 @@ The Nix development environment provides a fully reproducible setup with pinned 
 
 ## pip (Fallback)
 
-If you cannot use Nix, install dependencies via pip:
+If you cannot use Nix, install dependencies via pip. This path is not guaranteed to be fully reproducible and should be treated as best-effort.
 
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install torch==2.7.0 stable-baselines3==2.6.0 sb3-contrib==2.4.0 gymnasium==1.1.0 numpy==1.26.4 scipy==1.14.1 matplotlib==3.9.0 pandas==2.2.0 pyyaml==6.0.1
 ```
-
-### requirements.txt
-
-```
-torch==2.7.0
-stable-baselines3==2.6.0
-sb3-contrib==2.4.0
-gymnasium==1.1.0
-numpy==1.26.4
-scipy==1.14.1
-matplotlib==3.9.0
-pandas==2.2.0
-pyyaml==6.0.1
-```
-
----
 
 ## Verification
 

@@ -17,8 +17,8 @@ import pandas as pd
 from stable_baselines3 import PPO, DQN, A2C
 from sb3_contrib.ppo_mask import MaskablePPO
 
-from src.a2c_mask import MaskableA2C
-from src.dqn_mask import MaskableDQN
+from .a2c_mask import MaskableA2C
+from .dqn_mask import MaskableDQN
 
 
 # ---------------------------------------------------------------------------
@@ -28,8 +28,11 @@ from src.dqn_mask import MaskableDQN
 @dataclass(frozen=True)
 class RunSpec:
     run_id: str
+    treatment_id: str
     algorithm: str
     use_masking: bool
+    window_size: int
+    tail_size: int
     seed: int | None
     split_id: str
     model_path: str
@@ -41,8 +44,11 @@ class RunSpec:
 @dataclass(frozen=True)
 class EvalResult:
     run_id: str
+    treatment_id: str
     algorithm: str
     use_masking: bool
+    window_size: int
+    tail_size: int
     seed: int | None
     split_id: str
     model_path: str
@@ -66,8 +72,11 @@ class EvalResult:
 @dataclass(frozen=True)
 class TrainRun:
     run_id: str
+    treatment_id: str
     algorithm: str
     use_masking: bool
+    window_size: int
+    tail_size: int
     seed: int | None
     split_id: str
     model_path: str
@@ -78,8 +87,11 @@ class TrainRun:
     def to_manifest_row(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
+            "treatment_id": self.treatment_id,
             "algorithm": self.algorithm,
             "use_masking": str(self.use_masking).lower(),
+            "window_size": int(self.window_size),
+            "tail_size": int(self.tail_size),
             "seed": "" if self.seed is None else str(self.seed),
             "split_id": self.split_id,
             "model_path": self.model_path,
@@ -93,13 +105,17 @@ class TrainRun:
 # Schema constants
 # ---------------------------------------------------------------------------
 
+SEED_SUMMARY_REQUIRED_IDS = [
+    "split_id", "seed", "algorithm", "use_masking", "treatment_id",
+]
+
 MANIFEST_REQUIRED = [
-    "run_id", "algorithm", "use_masking", "seed",
+    "run_id", "treatment_id", "algorithm", "use_masking", "seed", "window_size", "tail_size",
     "split_id", "model_path", "trace_file", "topology_file", "node_file",
 ]
 
 EVAL_REQUIRED = [
-    "run_id", "algorithm", "use_masking", "seed", "split_id",
+    "run_id",  "treatment_id", "algorithm", "use_masking", "window_size", "tail_size","seed", "split_id",
     "episode_reward", "decision_count",
     "max_waiting", "avg_waiting",
     "max_slowdown", "avg_slowdown",
@@ -138,10 +154,13 @@ ALGORITHMS = {
     "maskable_ppo": MaskablePPO,
 }
 
+# TRAD_ALGORITHMS: list[str] = ["lcfs", "sjf", "unicep"]
+TRAD_ALGORITHMS  = ["fcfs", "lcfs", "sjf", "wfp3", "unicep", "f_1", "f_2"]
+
 # Grouping keys for aggregation
-CANON_KEYS = ["run_id", "algorithm", "use_masking", "seed", "split_id"]
-GROUP_KEYS = ["algorithm", "use_masking", "seed", "split_id"]
-ALGO_KEYS = ["algorithm", "use_masking", "split_id"]
+CANON_KEYS = ["run_id", "treatment_id", "algorithm", "use_masking", "seed", "split_id"]
+GROUP_KEYS = ["treatment_id", "algorithm", "use_masking", "seed", "split_id"]
+ALGO_KEYS = ["treatment_id", "algorithm", "use_masking", "split_id"]
 
 HOLDOUT_PATTERNS = [
     "/holdout",
@@ -152,6 +171,16 @@ HOLDOUT_PATTERNS = [
     "final_test",
 ]
 
+PARTITION_CONFIGS = {
+    "physical": {
+        "topology": "data/topology/physical_topology.txt",
+        "nodes":    "data/topology/nodes.csv",
+    },
+    "deeplearn": {
+        "topology": "data/topology/deeplearn_topology.txt",
+        "nodes":    "data/topology/nodes.csv",
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Argument parsing helpers
@@ -252,6 +281,7 @@ def validate_finite_numeric(df: pd.DataFrame, cols: list[str], context: str = ""
             issues.append(f"{col}: inf({inf_count})")
     if issues:
         raise ValueError(f"[{context}] Non-finite numeric values: {', '.join(issues)}")
+
 
 
 def load_csv_with_types(
@@ -445,8 +475,11 @@ def build_train_metadata(
     command_args: list[str],
     split_id: str,
     run_id: str,
+    treatment_id: str,
     algorithm: str,
     use_masking: bool,
+    window_size: int,
+    tail_size: int,
     seed: int | None,
     total_timesteps: int,
     save_interval: int,
@@ -464,8 +497,11 @@ def build_train_metadata(
         split_id=split_id,
         additional_info={
             "run_id": run_id,
+            "treatment_id": treatment_id,
             "algorithm": algorithm,
             "use_masking": use_masking,
+            "window_size": window_size,
+            "tail_size": tail_size,
             "seed": seed,
             "total_timesteps": total_timesteps,
             "save_interval": save_interval,
@@ -577,11 +613,13 @@ def load_split_metadata(
     with log_files[0].open("r") as f:
         return json.load(f)
 
-
 def write_manifest_entry(
+    treatment_id: str,
     algorithm: str,
     use_masking: bool,
     seed: int | None,
+    window_size: int,
+    tail_size: int,
     split_id: str,
     model_path: str,
     trace_file: str,
@@ -593,9 +631,7 @@ def write_manifest_entry(
     lock_path = manifest_path.with_suffix(".lock")
     with open(lock_path, "w") as lock_file:
         try:
-            # TODO: Acquire an exclusive lock before reading/writing manifest to avoid race conditions
-            # TODO: in multi-seed or cluster runs. Use fcntl.flock(lock_file, fcntl.LOCK_EX).
-            # Ref: https://docs.python.org/3/library/fcntl.html
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
             if manifest_path.exists():
                 df = pd.read_csv(manifest_path)
                 next_index = len(df[df["algorithm"] == algorithm]) + 1
@@ -608,9 +644,12 @@ def write_manifest_entry(
             entry = pd.DataFrame(
                 [[
                     run_id,
+                    treatment_id,
                     algorithm,
                     use_masking,
                     seed,
+                    window_size,
+                    tail_size,
                     split_id,
                     model_path,
                     trace_file,
@@ -623,6 +662,4 @@ def write_manifest_entry(
             print(f"[LOGGED] {run_id}")
             return run_id
         finally:
-            # TODO: Ensure flock is released even on exceptions.
-            # Ref: https://docs.python.org/3/library/fcntl.html
             fcntl.flock(lock_file, fcntl.LOCK_UN)

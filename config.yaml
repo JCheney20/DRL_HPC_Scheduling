@@ -6,6 +6,24 @@
 #   Smoke test: snakemake --configfile config.smoke.yaml
 # =============================================================================
 
+
+
+# --- Slurm ---------------------------------------------------------------
+executor: slurm
+use-singularity: true
+singularity-args: "--bind $PWD:/workspace --bind data:/workspace/data"
+latency-wait: 60
+jobs: 100
+rerun-incomplete: true
+default-resources:
+  mem_mb: 8000
+  runtime: 120
+  slurm_partition: cpu
+
+
+# --- Container ---------------------------------------------------------------
+container: "DRL_env.sif"
+
 # --- Trace -------------------------------------------------------------------
 trace_name: "physical_job"         # "physical_job" | "deep_learn"
 
@@ -21,12 +39,15 @@ algorithms:
   - "maskable_a2c"
   - "maskable_dqn"
 
+trad_algorithms:
+  - ""
+
 # --- Training hyperparameters ------------------------------------------------
 save_interval: 100000
 total_saving: 100                  # total timesteps = save_interval * total_saving
 window_size: 512
 tail_size: 64
-buffer_size: 512
+buffer_size: 1_000_000
 
 # --- Topology ----------------------------------------------------------------
 topology_file: "physical_topology.txt" # "physical" | "deep_learn"

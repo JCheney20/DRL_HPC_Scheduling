@@ -27,7 +27,7 @@ Pipeline per metric:
 References:
   - scipy.stats.friedmanchisquare: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.friedmanchisquare.html
   - scipy.stats.shapiro:           https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.shapiro.html
-  - scikit-posthocs conover:       https://scikit-posthocs.readthedocs.io/en/latest/tutorial/
+  - scikit-posthocs nemenyi:       https://scikit-posthocs.readthedocs.io/en/latest/tutorial/scipy.stats.nemenyi.html
   - numpy random Generator:        https://numpy.org/doc/stable/reference/random/generator.html
   - pandas pivot_table:            https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.pivot_table.html
   - argparse:                      https://docs.python.org/3/library/argparse.html
@@ -37,6 +37,7 @@ References:
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,8 @@ import scikit_posthocs as sp
 
 from src.utils import (
     ALGORITHMS,
+    TRAD_ALGORITHMS,
+    SEED_SUMMARY_REQUIRED_IDS,
     build_run_metadata,
     interpret_stat,
     load_seed_summary,
@@ -64,9 +67,6 @@ from src.utils import (
 # Schema constants
 # ---------------------------------------------------------------------------
 
-SEED_SUMMARY_REQUIRED_IDS = [
-    "split_id", "seed", "algorithm", "use_masking", "treatment_id",
-]
 
 PRIMARY_METRICS = [
     "avg_waiting",
@@ -74,30 +74,30 @@ PRIMARY_METRICS = [
 ]
 
 ALL_METRICS = [
-    "avg_waiting", "avg_slowdown",
-    "max_waiting", "max_slowdown",
+    "avg_waiting",
+    "avg_slowdown",
+    "max_waiting",
+    "max_slowdown",
     "avg_turnaround",
-    "cpu_utilization", "gpu_utilization",
+    "cpu_utilization",
+    "gpu_utilization",
     "episode_reward",
     "decision_latency_mean_ms",
     "eval_wall_s",
 ]
 
-# TODO: Define traditional baselines if included (e.g., fcfs, sjf, etc.).
-# Ref: https://snakemake.readthedocs.io/en/stable/
-TRAD_ALGORITHMS: list[str] = []
 
 METRIC_DIRECTION: dict[str, str] = {
-    "avg_waiting":              "lower_is_better",
-    "avg_slowdown":             "lower_is_better",
-    "max_waiting":              "lower_is_better",
-    "max_slowdown":             "lower_is_better",
-    "avg_turnaround":           "lower_is_better",
-    "cpu_utilization":          "higher_is_better",
-    "gpu_utilization":          "higher_is_better",
-    "episode_reward":           "higher_is_better",
+    "avg_waiting": "lower_is_better",
+    "avg_slowdown": "lower_is_better",
+    "max_waiting": "lower_is_better",
+    "max_slowdown": "lower_is_better",
+    "avg_turnaround": "lower_is_better",
+    "cpu_utilization": "higher_is_better",
+    "gpu_utilization": "higher_is_better",
+    "episode_reward": "higher_is_better",
     "decision_latency_mean_ms": "lower_is_better",
-    "eval_wall_s":              "lower_is_better",
+    "eval_wall_s": "lower_is_better",
 }
 
 KENDALL_W_THRESHOLDS = [
@@ -108,12 +108,6 @@ KENDALL_W_THRESHOLDS = [
     (0.7, "Almost Perfect Agreement"),
 ]
 
-VDA_THRESHOLDS = [
-    (0.56, "small"),
-    (0.64, "medium"),
-    (0.71, "large"),
-]
-
 MIN_ALGORITHMS = 3
 MIN_BLOCKS = 2
 
@@ -122,16 +116,36 @@ MIN_BLOCKS = 2
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Non-parametric statistical tests on seed-level RL evaluation results."
     )
-    parser.add_argument("--input", required=True, type=str, help="Path to seed_summary.csv from aggregate_results.py.")
-    parser.add_argument("--output-dir", default="result/stats", type=str, help="Directory to write statistical outputs.")
-    parser.add_argument("--metrics", default=None, nargs="+", type=str, help="Metrics to test. Defaults to ALL_METRICS.")
-    parser.add_argument("--alpha", default=0.05, type=float, help="Significance level for hypothesis tests.")
-    parser.add_argument("--bootstrap-reps", default=10000, type=int, help="Number of bootstrap resamples for median CIs.")
-    parser.add_argument("--bootstrap-seed", default=42, type=int, help="Random seed for bootstrap reproducibility.")
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=str,
+        help="Path to seed_summary.csv from aggregate_results.py.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="result/stats",
+        type=str,
+        help="Directory to write statistical outputs.",
+    )
+    parser.add_argument(
+        "--metrics",
+        default=None,
+        nargs="+",
+        type=str,
+        help="Metrics to test. Defaults to ALL_METRICS.",
+    )
+    parser.add_argument(
+        "--alpha",
+        default=0.05,
+        type=float,
+        help="Significance level for hypothesis tests.",
+    )
     return parser.parse_args()
 
 
@@ -139,23 +153,27 @@ def parse_args() -> argparse.Namespace:
 # Input loading and validation
 # ---------------------------------------------------------------------------
 
+
 def validate_stats_input_schema(df: pd.DataFrame, metric_cols: list[str]) -> None:
     validate_required_columns(df, SEED_SUMMARY_REQUIRED_IDS, context="seed_summary")
     validate_required_columns(df, metric_cols, context="seed_summary_metrics")
     validate_finite_numeric(df, PRIMARY_METRICS, context="seed_summary_primary_metrics")
-    # TODO: Baselines should remain in stats unless a test precondition fails.
-    # TODO: Do not globally drop baselines; only skip specific tests when needed.
 
-    invalid_algos = [algo for algo in df["algorithm"] if algo not in ALGORITHMS]
+    invalid_algos = [
+        algo for algo in df["algorithm"] if algo.split("__mask_")[0] not in (list(ALGORITHMS.keys()) + TRAD_ALGORITHMS)
+    ]
     if invalid_algos:
         raise ValueError(f"Invalid algorithms in seed summary {invalid_algos}")
 
-    validate_no_duplicates(df, ["split_id", "seed", "treatment_id"], context="seed_summary")
+    validate_no_duplicates(
+        df, ["split_id", "seed", "treatment_id"], context="seed_summary"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Data sufficiency
 # ---------------------------------------------------------------------------
+
 
 def check_data_sufficiency(
     df: pd.DataFrame,
@@ -176,7 +194,8 @@ def check_data_sufficiency(
         "n_blocks_total": n_blocks_total,
         "n_blocks_common": n_blocks_common,
         "balanced_blocks": n_blocks_common == n_blocks_total,
-        "min_requirements_met": n_treatments >= min_algorithms and n_blocks_common >= min_blocks,
+        "min_requirements_met": n_treatments >= min_algorithms
+        and n_blocks_common >= min_blocks,
     }
 
 
@@ -184,25 +203,43 @@ def check_data_sufficiency(
 # Repeated-measures matrix
 # ---------------------------------------------------------------------------
 
+
 def build_repeated_measures_matrix(
     df: pd.DataFrame,
     metric: str,
     block_col: str = "seed",
     group_col: str = "treatment_id",
 ) -> pd.DataFrame:
-    return df.pivot_table(index=block_col, columns=group_col, values=metric).dropna(how="any")
+    return df.pivot_table(index=block_col, columns=group_col, values=metric).dropna(
+        how="any"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Shapiro-Wilk diagnostics
 # ---------------------------------------------------------------------------
 
+
 def _shapiro_one(treatment_id: str, values: np.ndarray) -> dict[str, Any]:
     n = len(values)
     if n < 3:
-        return {"treatment_id": treatment_id, "n": n, "W": None, "p_value": None, "valid": False, "note": "n < 3"}
+        return {
+            "treatment_id": treatment_id,
+            "n": n,
+            "W": None,
+            "p_value": None,
+            "valid": False,
+            "note": "n < 3",
+        }
     W, p_value = stats.shapiro(values)
-    return {"treatment_id": treatment_id, "n": n, "W": float(W), "p_value": float(p_value), "valid": True, "note": ""}
+    return {
+        "treatment_id": treatment_id,
+        "n": n,
+        "W": float(W),
+        "p_value": float(p_value),
+        "valid": True,
+        "note": "",
+    }
 
 
 def run_shapiro_diagnostics(matrix_df: pd.DataFrame) -> dict[str, Any]:
@@ -215,6 +252,7 @@ def run_shapiro_diagnostics(matrix_df: pd.DataFrame) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Friedman test
 # ---------------------------------------------------------------------------
+
 
 def run_friedman_test(matrix_df: pd.DataFrame, alpha: float) -> dict[str, Any]:
     if matrix_df.shape[1] < MIN_ALGORITHMS or matrix_df.shape[0] < MIN_BLOCKS:
@@ -242,7 +280,11 @@ def run_friedman_test(matrix_df: pd.DataFrame, alpha: float) -> dict[str, Any]:
 
 
 def compute_kendall_w(chi2: float, n_blocks: int, k_groups: int) -> dict[str, Any]:
-    W = float(chi2 / (n_blocks * (k_groups - 1))) if (n_blocks * (k_groups - 1)) != 0 else 0.0
+    W = (
+        float(chi2 / (n_blocks * (k_groups - 1)))
+        if (n_blocks * (k_groups - 1)) != 0
+        else 0.0
+    )
     return {
         "measure": "Kendall W",
         "value": W,
@@ -251,21 +293,18 @@ def compute_kendall_w(chi2: float, n_blocks: int, k_groups: int) -> dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# Nemenyi post-hoc + VDA
+# Nemenyi post-hoc
 # ---------------------------------------------------------------------------
+
 
 def run_nemenyi_posthoc(
     matrix_df: pd.DataFrame,
     alpha: float,
     metric_name: str,
 ) -> dict[str, Any]:
-    # TODO: Confirm this is the authoritative post-hoc (Nemenyi) for the paper.
-    # TODO: Ensure output schema matches stats_summary.json contract.
-    # Ref: https://scikit-posthocs.readthedocs.io/en/latest/generated/scikit_posthocs.posthoc_nemenyi_friedman.html
-    # TODO: Skip Nemenyi only if a precondition fails (e.g., rank degeneracy).
-    # TODO: Define degeneracy rule (e.g., <2 distinct mean ranks) and surface in result schema.
     p_matrix = sp.posthoc_nemenyi_friedman(matrix_df)
-    mean_ranks = pd.Series(matrix_df.rank(axis=1).mean(axis=0))
+    asc = METRIC_DIRECTION[metric_name] == "lower_is_better"
+    mean_ranks = pd.Series(matrix_df.rank(axis=1, ascending=asc).mean(axis=0))
     result_pairs = []
 
     pairs = [
@@ -301,71 +340,84 @@ def run_nemenyi_posthoc(
 # Bootstrap median CIs
 # ---------------------------------------------------------------------------
 
-def Wilcoxon_np_ci(values_a: np.ndarray, values_b: np.ndarray, alpha: float) -> dict[str, Any]:
-    # TODO: Implement Wilcoxon non-parametric CI for paired differences per Carrasco (Sec 3.4).
-    # TODO: Let l = number of paired observations; compute all l^2 differences.
-    # TODO: Exact K: K = W_{alpha/2} - l(l+1)/2, where W_{alpha/2} is the alpha/2 percentile
-    #       of the Wilcoxon two-sample statistic distribution (see Center, pp 156-162).
-    # TODO: Approximate K for l > 20:
-    #       K = (l^2 / 2) - z_{1-alpha/2} * sqrt(l^2(2l+1)/12), then round up.
-    # TODO: CI is [Kth smallest diff, Kth largest diff] of the l^2 differences.
-    # TODO: The CI uses l^2 pairwise differences; for large l this is O(l^2) memory/time.
-    # TODO: Consider vectorized computation with NumPy broadcasting and/or chunking to avoid RAM spikes.
+
+def Wilcoxon_np_ci(
+    values_a: pd.Series, values_b: pd.Series, alpha: float
+) -> dict[str, Any]:
+    """
     # Ref: https://numpy.org/doc/stable/reference/generated/numpy.subtract.outer.html
     # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wilcoxon.html
     # Ref: https://en.wikipedia.org/wiki/Wilcoxon_signed-rank_test
-    return {"ci_low": None, "ci_high": None, "alpha": alpha}
+    """
+    assert len(values_a) == len(values_b), "Paired inputs must be the same length"
+    d = (values_a - values_b).to_numpy()
+    l = len(d)
+
+    i, j = np.tril_indices(l)
+
+    walsh_sorted = np.sort((d[i] + d[j]) / 2)
+    n_walsh = len(walsh_sorted)
+    if l <= 20:
+        result = stats.wilcoxon(d, method="exact")
+        W = result.statistic
+        K = int(W) + 1
+    else:
+        result = stats.wilcoxon(d, method="asymptotic")
+        W, z = result.statistic, result.zstatistic
+        K = (n_walsh / 2) - z * math.sqrt(n_walsh * (2 * l + 1) / 6)
+        K = math.ceil(K)
+
+    return {
+        "ci_low": float(walsh_sorted[K - 1]),
+        "ci_high": float(walsh_sorted[n_walsh - K]),
+        "alpha": alpha,
+        "statistic": float(W),
+    }
 
 
-def confidence_curve(values_a: np.ndarray, values_b: np.ndarray, grid: np.ndarray) -> pd.DataFrame:
-    # TODO: Produce per-pair confidence curves over a delta grid (Carrasco Sec 3.4.1).
-    # TODO: x-axis: delta (null difference), y-axis: Wilcoxon p-value for values_a - values_b - delta.
-    # TODO: Define a standard grid (e.g., linspace over percentile range of paired diffs).
-    # TODO: Compute curve using vectorized differences if grid is large (avoid Python loops).
-    # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wilcoxon.html
-    # Evaluate Wilcoxon p-values across null differences in grid
+def compute_confidence_curves(
+    values_a: pd.Series, values_b: pd.Series, grid: pd.Series, metric: str
+) -> pd.DataFrame:
+    treatment_a = values_a.name
+    treatment_b = values_b.name
+    d = values_a - values_b
+    l = len(d)
+    method = "exact" if l <= 20 else "asymptotic"
+
     rows = []
     for delta in grid:
-        stat, p = stats.wilcoxon(values_a - values_b - delta)
-        rows.append({"delta": float(delta), "p_value": float(p)})
+        result = stats.wilcoxon(d - delta, method=method)
+        rows.append(
+            {
+                "metric": metric,
+                "treatment_a": treatment_a,
+                "treatment_b": treatment_b,
+                "delta": float(delta),
+                "p_value": float(result.pvalue),
+            }
+        )
     return pd.DataFrame(rows)
 
 
-
-def bootstrap_median_ci(
-    matrix_df: pd.DataFrame,
-    n_boot: int = 10000,
-    seed: int = 42,
-    ci: float = 0.95,
-) -> dict[str, Any]:
-    # TODO: Decide whether to keep bootstrap median CIs in addition to Wilcoxon CI.
-    # Ref: https://numpy.org/doc/stable/reference/random/generated/numpy.random.Generator.choice.html
-    rng = np.random.default_rng(seed)
-    lower_pct = (1 - ci) / 2 * 100
-    upper_pct = (1 - lower_pct / 100) * 100
-    treatment_data = []
-
-    for col in matrix_df.columns:
-        vals = matrix_df[col].to_numpy()
-        bootstrap_medians = [np.median(rng.choice(vals, size=len(vals), replace=True)) for _ in range(n_boot)]
-        ci_low, ci_high = np.percentile(bootstrap_medians, [lower_pct, upper_pct])
-        treatment_data.append(
-            {
-                "treatment_id": col,
-                "n_blocks": vals.shape[0],
-                "median": float(np.median(vals)),
-                "ci_low": float(ci_low),
-                "ci_high": float(ci_high),
-            }
-        )
-
+def run_page_trend_test(matrix_df: pd.DataFrame, alpha: float) -> dict[str, Any]:
+    treatment_order = [
+        col
+        for col in matrix_df.columns
+        if col.split("__mask_")[0] in (list(ALGORITHMS.keys()) + TRAD_ALGORITHMS)
+    ]
+    if len(treatment_order) < 3:
+        return {
+            "performed": False,
+            "skipped_reason": "fewer than 3 ordered treatments present",
+        }
+    ordered = matrix_df[treatment_order]
+    result = stats.page_trend_test(ordered.to_numpy())
     return {
         "performed": True,
-        "reps": n_boot,
-        "ci_low": None,
-        "ci_high": None,
-        "method": "median_percentile",
-        "per_treatment": treatment_data,
+        "statistic": float(result.statistic),
+        "p_value": float(result.pvalue),
+        "significant": bool(result.pvalue < alpha),
+        "treatment_order": treatment_order,
     }
 
 
@@ -373,10 +425,10 @@ def bootstrap_median_ci(
 # CD diagram input
 # ---------------------------------------------------------------------------
 
-def build_cd_diagram_input(matrix_df: pd.DataFrame) -> dict[str, Any]:
-    # TODO: Confirm ranking direction per metric (lower_is_better vs higher_is_better).
-    # Ref: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rank.html
-    avg_ranks = pd.Series(matrix_df.rank(axis=1, ascending=True).mean(axis=0))
+
+def build_cd_diagram_input(matrix_df: pd.DataFrame, metric: str) -> dict[str, Any]:
+    asc = METRIC_DIRECTION[metric] == "lower_is_better"
+    avg_ranks = pd.Series(matrix_df.rank(axis=1, ascending=asc).mean(axis=0))
     avg_rank_data = []
     for treatment_id in avg_ranks.index:
         algorithm, use_masking = treatment_id.split("__mask_")
@@ -397,6 +449,7 @@ def build_cd_diagram_input(matrix_df: pd.DataFrame) -> dict[str, Any]:
 # Result compilation
 # ---------------------------------------------------------------------------
 
+
 def compile_metric_result(
     metric: str,
     sufficiency: dict[str, Any],
@@ -412,14 +465,7 @@ def compile_metric_result(
     status: str = "ok",
     skip_reason: str | None = None,
 ) -> dict[str, Any]:
-    # TODO: Align return schema with stats_summary.json contract.
-    # TODO: Include explicit flags for each stage (performed/skipped) for fail-fast auditing.
-    # TODO: Ensure confidence_curves and page_trend are always present (even if skipped).
-    # TODO: Add "treatment_order" field so Page trend assumptions are explicit.
-    # TODO: Add "metric_direction" to enforce rank direction downstream.
-    # Ref: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rank.html
     return {
-
         "metric_name": metric,
         "direction": METRIC_DIRECTION[metric],
         "status": status,
@@ -437,11 +483,10 @@ def compile_metric_result(
     }
 
 
-def _descriptive_stats(matrix_df: pd.DataFrame) -> dict[str, Any]:
-    # TODO: Align descriptive stats with treatment order (ALGORITHMS + TRAD_ALGORITHMS).
-    # Ref: https://pandas.pydata.org/docs/reference/api/pandas.Series.describe.html
+def _descriptive_stats(matrix_df: pd.DataFrame, metric: str) -> dict[str, Any]:
     treatment_data = []
-    mean_ranks = pd.Series(matrix_df.rank(axis=1).mean(axis=0))
+    asc = METRIC_DIRECTION[metric] == "lower_is_better"
+    mean_ranks = pd.Series(matrix_df.rank(axis=1, ascending=asc).mean(axis=0))
 
     for col in matrix_df.columns:
         desc = pd.Series(matrix_df[col].describe())
@@ -469,21 +514,12 @@ def _descriptive_stats(matrix_df: pd.DataFrame) -> dict[str, Any]:
 # Full pipeline
 # ---------------------------------------------------------------------------
 
+
 def run_all_metrics(
     df: pd.DataFrame,
     metrics: list[str],
     alpha: float,
-    bootstrap_reps: int,
-    bootstrap_seed: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    # TODO: Add fail-fast option to exit immediately on first metric error.
-    # TODO: Use treatment ordering based on ALGORITHMS + TRAD_ALGORITHMS for Page test.
-    # TODO: Compute Wilcoxon CI per pair and confidence curves per pair.
-    # TODO: Compute Page trend test when ordering is available.
-    # TODO: Only skip tests when their preconditions fail; keep baselines in all other tests.
-    # TODO: Add CLI flag for fail_fast in stats so pipeline stops on first error.
-    # TODO: Add ordering list in metadata for Page trend (ALGORITHMS + TRAD_ALGORITHMS).
-    # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.page_trend_test.html
     errors: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
 
@@ -492,7 +528,11 @@ def run_all_metrics(
         data_sufficency = check_data_sufficiency(df, metric)
 
         if not data_sufficency["min_requirements_met"]:
-            stage, status, skipped_reason = "data_sufficency", "skipped", "data_insufficient"
+            stage, status, skipped_reason = (
+                "data_sufficency",
+                "skipped",
+                "data_insufficient",
+            )
             results.append(
                 {
                     "metric_name": metric,
@@ -508,15 +548,29 @@ def run_all_metrics(
             matrix_df = build_repeated_measures_matrix(df, metric)
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         try:
             stage = "descriptive_stats"
-            descriptive_stats = _descriptive_stats(matrix_df)
+            descriptive_stats = _descriptive_stats(matrix_df, metric)
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         try:
@@ -524,7 +578,14 @@ def run_all_metrics(
             shapiro = run_shapiro_diagnostics(matrix_df)
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         try:
@@ -536,45 +597,148 @@ def run_all_metrics(
             friedman_significant = friedman["significant"]
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         if friedman_significant:
             try:
                 stage = "nemenyi"
-                conover = run_nemenyi_posthoc(matrix_df, alpha, metric)
+                nemenyi = run_nemenyi_posthoc(matrix_df, alpha, metric)
             except Exception as e:
                 status, skipped_reason = "error", f"{e}"
-                errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+                errors.append(
+                    {
+                        "metric_name": metric,
+                        "stage": stage,
+                        "status": status,
+                        "skipped_reason": skipped_reason,
+                    }
+                )
                 continue
         else:
             skipped_reason = "Friedman not significant"
-            conover = {"performed": False, "skipped_reason": skipped_reason}
+            nemenyi = {"performed": False, "skipped_reason": skipped_reason}
+
+        try:
+            stage = "confidence_curve"
+            confidence_curves_list = []
+            if nemenyi.get("performed"):
+                for pair in nemenyi.get("pairs", []):
+                    if pair["significant"]:
+                        a, b = pair["treatment_a"], pair["treatment_b"]
+                        d = matrix_df[a].to_numpy() - matrix_df[b].to_numpy()
+                        grid = np.linspace(
+                            np.percentile(d, 1), np.percentile(d, 99), 200
+                        )
+                        curve_df = compute_confidence_curves(
+                            matrix_df[a], matrix_df[b], grid, metric
+                        )
+                        confidence_curves_list.append(curve_df)
+
+                if confidence_curves_list:
+                    confidence_curve = {
+                        "performed": True,
+                        "curves": pd.concat(confidence_curves_list).to_dict("records"),
+                    }
+                else:
+                    confidence_curve = {
+                        "performed": False,
+                        "skipped_reason": "no significant Nemenyi pairs",
+                    }
+            else:
+                skipped_reason = "Nemenyi not performed"
+                confidence_curve = {
+                    "performed": False,
+                    "skipped_reason": skipped_reason,
+                }
+        except Exception as e:
+            status, skipped_reason = "error", f"{e}"
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
+            continue
 
         try:
             stage = "kendall_w"
             kendall_w = compute_kendall_w(chi2, n_blocks, k_groups)
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         try:
             stage = "wilcoxon_ci"
-            # TODO: Replace placeholder call with per-pair Wilcoxon CI calculation.
-            # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wilcoxon.html
-            median_ci = Wilcoxon_np_ci(matrix_df, bootstrap_reps, bootstrap_seed)
+            wilcoxon_pairs = []
+            pairs = [
+                (a, b)
+                for i, a in enumerate(matrix_df.columns)
+                for j, b in enumerate(matrix_df.columns)
+                if i < j
+            ]
+            for a, b in pairs:
+                result = Wilcoxon_np_ci(matrix_df[a], matrix_df[b], alpha)
+                wilcoxon_pairs.append({"treatment_a": a, "treatment_b": b, **result})
+            wilcoxon = {"performed": True, "pairs": wilcoxon_pairs}
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
+            continue
+
+        try:
+            stage = "page_trend"
+            page_trend = run_page_trend_test(matrix_df, alpha)
+
+        except Exception as e:
+            status, skipped_reason = "error", f"{e}"
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         try:
             stage = "build_cd_diagram_input"
-            cd_diagram_input = build_cd_diagram_input(matrix_df)
+            cd_diagram_input = build_cd_diagram_input(matrix_df, metric)
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
-            errors.append({"metric_name": metric, "stage": stage, "status": status, "skipped_reason": skipped_reason})
+            errors.append(
+                {
+                    "metric_name": metric,
+                    "stage": stage,
+                    "status": status,
+                    "skipped_reason": skipped_reason,
+                }
+            )
             continue
 
         metric_result = compile_metric_result(
@@ -583,10 +747,10 @@ def run_all_metrics(
             shapiro,
             friedman,
             kendall_w,
-            conover,
-            median_ci,
-            # TODO: Pass confidence_curves and page_trend once implemented.
-            # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.page_trend_test.html
+            nemenyi,
+            wilcoxon,
+            confidence_curve,
+            page_trend,
             cd_diagram_input,
             descriptive_stats,
         )
@@ -599,16 +763,17 @@ def run_all_metrics(
 # Metadata sidecar
 # ---------------------------------------------------------------------------
 
+
 def build_stats_metadata(
     args: argparse.Namespace,
     input_df: pd.DataFrame,
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    # TODO: Add treatment order (ALGORITHMS + TRAD_ALGORITHMS) to metadata.
-    # TODO: Capture whether Page trend test ran and why it may be skipped.
     n_treatments_input = input_df["treatment_id"].nunique()
     n_blocks_input = input_df["seed"].nunique()
-    duplicate_key_rows = int(input_df.duplicated(subset=["split_id", "seed", "treatment_id"]).sum())
+    duplicate_key_rows = int(
+        input_df.duplicated(subset=["split_id", "seed", "treatment_id"]).sum()
+    )
     non_finite_primary_metric_rows = int(
         (~np.isfinite(input_df[PRIMARY_METRICS])).any(axis=1).sum()
     )
@@ -621,6 +786,7 @@ def build_stats_metadata(
             "split_ids": input_df["split_id"].unique().tolist(),
             "n_treatments": n_treatments_input,
             "n_blocks": n_blocks_input,
+            "treatment_order": list(ALGORITHMS.keys()) + TRAD_ALGORITHMS,
         },
     )
 
@@ -638,6 +804,7 @@ def build_stats_metadata(
 # Output writers
 # ---------------------------------------------------------------------------
 
+
 def write_stats_outputs(
     results: list[dict[str, Any]],
     metadata: dict[str, Any],
@@ -645,6 +812,10 @@ def write_stats_outputs(
     out_dir: Path,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata["global_checks"]["page_trend_ran"] = any(
+        r.get("page_trend", {}).get("performed") for r in results
+    )
 
     stats_summary = {
         "stats_summary_version": "1.0.0",
@@ -660,23 +831,44 @@ def write_stats_outputs(
         nemenyi = result.get("nemenyi", {})
         if nemenyi.get("performed"):
             all_pairs.extend(nemenyi.get("pairs", []))
-    if all_pairs:
-        write_csv(pd.DataFrame(all_pairs), out_dir / "pairwise_nemenyi.csv")
-    else:
-        write_csv(pd.DataFrame([]), out_dir / "pairwise_nemenyi.csv")
+    write_csv(
+        pd.DataFrame(all_pairs) if all_pairs else pd.DataFrame([]),
+        out_dir / "pairwise_nemenyi.csv",
+    )
+
+    all_wilcoxon: list[dict[str, Any]] = []
+    for result in results:
+        wilcoxon_ci = result.get("wilcoxon_ci", {})
+        if wilcoxon_ci.get("performed"):
+            for row in wilcoxon_ci.get("pairs", []):
+                all_wilcoxon.append({"metric_name": result.get("metric_name"), **row})
+    write_csv(
+        pd.DataFrame(all_wilcoxon) if all_wilcoxon else pd.DataFrame([]),
+        out_dir / "confidence_intervals.csv",
+    )
 
     all_ranks: list[dict[str, Any]] = []
     for result in results:
         cd_input = result.get("cd_input", {})
         if cd_input.get("available"):
             for row in cd_input.get("average_ranks", []):
-                row_with_metric = dict(row)
-                row_with_metric["metric_name"] = result.get("metric_name")
-                all_ranks.append(row_with_metric)
-    if all_ranks:
-        write_csv(pd.DataFrame(all_ranks), out_dir / "cd_diagram_input.csv")
-    else:
-        write_csv(pd.DataFrame([]), out_dir / "cd_diagram_input.csv")
+                all_ranks.append(
+                    {"metric_name": result.get("metric_name"), **dict(row)}
+                )
+    write_csv(
+        pd.DataFrame(all_ranks) if all_ranks else pd.DataFrame([]),
+        out_dir / "cd_diagram_input.csv",
+    )
+
+    all_page: list[dict[str, Any]] = []
+    for result in results:
+        pt = result.get("page_trend", {})
+        if pt.get("performed"):
+            all_page.append({"metric_name": result.get("metric_name"), **pt})
+    write_csv(
+        pd.DataFrame(all_page) if all_page else pd.DataFrame([]),
+        out_dir / "page_trend.csv",
+    )
 
     write_json(metadata["run_metadata"], out_dir / "stats_meta.json")
 
@@ -684,6 +876,7 @@ def write_stats_outputs(
 # ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     args = parse_args()
@@ -703,8 +896,6 @@ def main() -> None:
         df,
         metrics=metrics,
         alpha=args.alpha,
-        bootstrap_reps=args.bootstrap_reps,
-        bootstrap_seed=args.bootstrap_seed,
     )
 
     metadata = build_stats_metadata(args, df, errors)

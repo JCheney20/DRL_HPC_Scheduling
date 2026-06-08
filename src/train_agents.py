@@ -61,6 +61,7 @@ ACTIVATION_MAP: dict[str, Any] = {
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = ArgumentParserWithDefaults(description="Agent Scheduler training.")
 
@@ -196,11 +197,9 @@ def parse_args() -> argparse.Namespace:
         help="Split ID to use (e.g., 'physical_job_r70'). Optional; auto-detects if only one split exists.",
         type=str,
     )
-    # TODO: Snakemake passes a filename fragment in some rules, but load_split_metadata expects a token like
-    # TODO: "physical_job_r70" (not "physical_job_r70.json"). Passing a filename will fail the lookup.
-    # TODO: Standardize on token-only split_id in Snakemake + CLI help text and reject filenames here.
-    # Ref: https://docs.python.org/3/library/pathlib.html
+
     args = parser.parse_args()
+    args.split_id = Path(args.split_id).stem if "." in args.split_id else args.split_id
     print(args)
     return args
 
@@ -208,6 +207,7 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 # Validation and setup
 # ---------------------------------------------------------------------------
+
 
 def validate_args(args: argparse.Namespace) -> None:
     validate_not_holdout(args.trace_file, context="train_args", raise_error=True)
@@ -234,10 +234,6 @@ def build_training_env(
     tail_size: int,
     seed: int | None,
 ) -> HPCsim:
-    # TODO: Eval currently hard-codes window_size/tail_size; if these differ from training,
-    # TODO: reproducibility breaks and stats may compare mismatched settings. Either persist
-    # TODO: the values in the manifest or pass through eval CLI.
-    # Ref: https://gymnasium.farama.org/
     return HPCsim(
         topology_file=f"data/topology/{topology_file}",
         allocator="best_fit",
@@ -285,10 +281,14 @@ def build_model(
 # Training and logging
 # ---------------------------------------------------------------------------
 
+
 def train_and_log(
     model: Any,
+    treatment_id: str,
     algorithm: str,
     use_masking: bool,
+    window_size: int,
+    tail_size: int,
     save_interval: int,
     total_saving: int,
     name: str,
@@ -307,15 +307,8 @@ def train_and_log(
 
     total_timesteps = save_interval * total_saving
     t_start = time.perf_counter()
-    # TODO: Capture per-algorithm training wall time (start/end timestamps) and write to metadata
-    # TODO: so average train time per model can be reported per trace (physical vs deeplearn).
-    # TODO: Use datetime.now(timezone.utc) or perf_counter deltas for consistency.
     episodes_completed: int | None = None
 
-
-    # TODO: Ensure use_masking values are consistent for treatment_id (algorithm__mask_true/false).
-    # TODO: Otherwise, aggregation will mix maskable vs non-maskable runs under the same algorithm.
-    # Ref: https://stable-baselines3.readthedocs.io/
     if "mask" in algorithm.lower():
         for i in range(1, total_saving + 1):
             model.learn(
@@ -326,7 +319,7 @@ def train_and_log(
             )
             model.save(str(selector_dir / f"{save_interval * i}"))
     else:
-        use_masking = False 
+        use_masking = False
         for i in range(1, total_saving + 1):
             model.learn(
                 reset_num_timesteps=False,
@@ -343,10 +336,14 @@ def train_and_log(
             episodes_completed = None
 
     model_path = str(selector_dir / f"{total_timesteps}.zip")
+
     run_id = write_manifest_entry(
+        treatment_id=treatment_id,
         algorithm=algorithm,
         use_masking=use_masking,
         seed=seed,
+        window_size=window_size,
+        tail_size=tail_size,
         split_id=split_id,
         model_path=model_path,
         trace_file=trace_file,
@@ -358,8 +355,11 @@ def train_and_log(
         command_args=sys.argv,
         split_id=split_id,
         run_id=run_id,
+        treatment_id=treatment_id,
         algorithm=algorithm,
         use_masking=use_masking,
+        window_size=window_size,
+        tail_size=tail_size,
         seed=seed,
         total_timesteps=total_timesteps,
         save_interval=save_interval,
@@ -371,14 +371,12 @@ def train_and_log(
         episodes_completed=episodes_completed,
     )
     write_json(metadata, models_dir / "train_metadata.json")
-    # TODO: If stats needs treatment ordering or extra run fields, write them here or to manifest.
-    # TODO: This avoids re-deriving them later and makes runs reproducible on cluster.
-    # Ref: https://docs.python.org/3/library/json.html
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     args = parse_args()
@@ -430,13 +428,18 @@ def main() -> None:
 
     if "mask" in args.algorithm.lower():
         use_masking = args.use_masking
-    else: 
+    else:
         use_masking = False
+
+    treatment_id = args.algorithm.lower() + "__mask_" + str(use_masking).lower()
 
     train_and_log(
         model=model,
+        treatment_id=treatment_id,
         algorithm=args.algorithm,
         use_masking=use_masking,
+        window_size=args.window_size,
+        tail_size=args.tail_size,
         save_interval=args.save_interval,
         total_saving=args.total_saving,
         name=args.name,

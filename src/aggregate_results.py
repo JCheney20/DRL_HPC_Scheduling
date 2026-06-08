@@ -27,6 +27,7 @@ from src.utils import (
     CORE_METRICS,
     EVAL_REQUIRED,
     GROUP_KEYS,
+    TRAD_ALGORITHMS,
     build_aggregate_metadata,
     load_eval_summary,
     load_run_manifest,
@@ -42,9 +43,12 @@ from src.utils import (
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Aggregate RL evaluation outputs.")
-    parser.add_argument("--manifest", required=True, type=str, help="Path to run manifest CSV.")
+    parser.add_argument(
+        "--manifest", required=True, type=str, help="Path to run manifest CSV."
+    )
     parser.add_argument(
         "--eval-root",
         default="result/eval_runs/runs",
@@ -70,6 +74,7 @@ def parse_args() -> argparse.Namespace:
 # Eval artifact discovery
 # ---------------------------------------------------------------------------
 
+
 def discover_eval_artifacts(
     manifest_df: pd.DataFrame,
     eval_root: Path,
@@ -91,13 +96,17 @@ def discover_eval_artifacts(
 # Metadata attachment
 # ---------------------------------------------------------------------------
 
-def attach_manifest_metadata(eval_df: pd.DataFrame, manifest_row: pd.Series) -> pd.DataFrame:
+
+def attach_manifest_metadata(
+    eval_df: pd.DataFrame, manifest_row: pd.Series
+) -> pd.DataFrame:
     return eval_df.assign(**{col: manifest_row[col] for col in CANON_KEYS})
 
 
 # ---------------------------------------------------------------------------
 # Wide table construction
 # ---------------------------------------------------------------------------
+
 
 def build_eval_wide(eval_frames: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(eval_frames, ignore_index=True)
@@ -106,19 +115,18 @@ def build_eval_wide(eval_frames: list[pd.DataFrame]) -> pd.DataFrame:
 def check_key_uniqueness(df: pd.DataFrame, key_cols: list[str], context: str) -> None:
     duplicates = df[df.duplicated(subset=key_cols, keep=False)]
     if not duplicates.empty:
-        raise ValueError(f"[{context}] Duplicate rows found on keys {key_cols}:\n{duplicates}")
+        raise ValueError(
+            f"[{context}] Duplicate rows found on keys {key_cols}:\n{duplicates}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
 
+
 def aggregate_seed_summary(eval_wide: pd.DataFrame) -> pd.DataFrame:
     df = eval_wide[GROUP_KEYS + CORE_METRICS]
-    df["treatment_id"] = df["algorithm"].astype(str) + "__mask_" + df["use_masking"].astype(str)
-    # TODO: treatment_id must match stats expectations exactly: "{algorithm}__mask_{use_masking}".
-    # TODO: If use_masking is bool, ensure lower-case "true/false" for stable ordering.
-    # Ref: https://pandas.pydata.org/docs/reference/api/pandas.Series.astype.html
     df = df.groupby(GROUP_KEYS).agg(["mean", "std"])
     df.columns = ["_".join(col) for col in df.columns]
     return df.reset_index()
@@ -132,30 +140,63 @@ def aggregate_algorithm_summary(seed_summary: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index()
 
 
+def aggregate_train_time(eval_wide: pd.DataFrame, strict: bool) -> pd.DataFrame:
+    GROUP_SET = ["treatment_id", "algorithm", "use_masking", "split_id"]
+    records = []
+
+    for run in eval_wide.itertuples(index=False):
+        if run.algorithm in TRAD_ALGORITHMS: #type: ignore
+            continue
+        train_metadata_path = Path(run.model_path).parent.parent / "train_metadata.json"  # type: ignore
+        if not train_metadata_path.exists():
+            if strict:
+                raise FileNotFoundError(f"{train_metadata_path} not found")
+            print(f"[WARNING] {train_metadata_path} not found, skipping")
+            continue
+        meta = pd.read_json(train_metadata_path, typ="series")
+        records.append(meta[GROUP_SET + ["wall_clock_s"]])
+    if not records:
+        return pd.DataFrame(
+            columns=(GROUP_SET + ["wall_clock_s_mean", "wall_clock_s_std", "wall_clock_s_count"]))  # type: ignore
+
+    train_df = pd.concat(records, ignore_index=True)
+    agg = (
+        train_df.groupby(GROUP_SET)["wall_clock_s"]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+    )
+    return agg
+
+
 # ---------------------------------------------------------------------------
 # QC
 # ---------------------------------------------------------------------------
+
 
 def compute_aggregation_qc(
     eval_wide: pd.DataFrame,
     seed_summary: pd.DataFrame,
     algo_summary: pd.DataFrame,
+    train_time_summary: pd.DataFrame,
 ) -> dict[str, Any]:
-    # TODO: Add average train-time per model per trace using train metadata sidecars.
-    # TODO: This should summarize wall_clock_s across runs for physical vs deeplearn traces.
+
     return {
         "eval_wide_count": eval_wide.shape[0],
         "seed_summary_count": seed_summary.shape[0],
         "algo_summary_count": algo_summary.shape[0],
         "eval_wide_nan_count": eval_wide[CORE_METRICS].isnull().sum().to_dict(),
-        "run_duplicates_count": eval_wide[eval_wide.duplicated(subset=["run_id"], keep=False)].shape[0],
+        "run_duplicates_count": eval_wide[
+            eval_wide.duplicated(subset=["run_id"], keep=False)
+        ].shape[0],
         "eval_wide_stats": eval_wide[CORE_METRICS].describe().to_dict(),
+        "train_time_summary": train_time_summary.to_dict(orient="records"),
     }
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     args = parse_args()
@@ -195,12 +236,16 @@ def main() -> None:
         sys.exit(1)
 
     eval_wide = build_eval_wide(eval_frames)
+    validate_finite_numeric(eval_wide, CORE_METRICS, context="eval_wide")
     check_key_uniqueness(eval_wide, key_cols=["run_id"], context="eval_wide")
 
     seed_summary = aggregate_seed_summary(eval_wide)
     algorithm_summary = aggregate_algorithm_summary(seed_summary)
+    train_time_summary = aggregate_train_time(eval_wide, strict=args.strict)
 
-    qc_stats = compute_aggregation_qc(eval_wide, seed_summary, algorithm_summary)
+    qc_stats = compute_aggregation_qc(
+        eval_wide, seed_summary, algorithm_summary, train_time_summary
+    )
     metadata = build_aggregate_metadata(
         command_args=sys.argv,
         manifest_path=manifest_path,

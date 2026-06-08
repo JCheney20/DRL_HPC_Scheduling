@@ -89,11 +89,11 @@ GPU cluster topology (similar format).
 
 ## Obtaining the Datasets
 
-### Option 1: Request Access
+### Option 1: Official HPCSim Release (Recommended)
 
-Contact the repository maintainer for access to the original traces:
-- **Email:** [To be filled]
-- **Expected response time:** 1-2 weeks
+The canonical release for the HPCSim environment and Slurm traces is the Wang et al. repository:
+
+- https://gitlab.unimelb.edu.au/lingfeiw/herasched
 
 ### Option 2: Use Publicly Available Traces
 
@@ -175,7 +175,21 @@ All datasets used in this project:
 
 ## Citation
 
-If using the datasets provided by this project, please cite:
+If using the datasets and HPCSim environment, please cite:
+
+```bibtex
+@article{Wang2025_1,
+  author = {Lingfei Wang and Maria A. Rodriguez and Nir Lipovetzky},
+  title = {Optimizing {HPC} scheduling: a hierarchical reinforcement learning approach for intelligent job selection and allocation},
+  journal = {Journal of Supercomputing},
+  year = {2025},
+  volume = {81},
+  number = {8},
+  month = {June},
+  publisher = {Springer},
+  doi = {10.1007/s11227-025-07396-3}
+}
+```
 
 ```bibtex
 @misc{Cheney2026hpc_data,

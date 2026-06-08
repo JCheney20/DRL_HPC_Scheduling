@@ -38,13 +38,21 @@ from src.utils import (
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser("Deterministic RL evaluation runner")
     parser.add_argument("--manifest", required=True, type=str)
     parser.add_argument("--output-dir", default="result/eval_runs", type=str)
-    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--deterministic", action=argparse.BooleanOptionalAction, default=True
+    )
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--filter-seed", type=int, default=None, help="Only evaluate runs matching this seed.")
+    parser.add_argument(
+        "--filter-seed",
+        type=int,
+        default=None,
+        help="Only evaluate runs matching this seed.",
+    )
     add_standard_debug_args(parser)
     return parser.parse_args()
 
@@ -53,25 +61,26 @@ def parse_args() -> argparse.Namespace:
 # Manifest loading and validation
 # ---------------------------------------------------------------------------
 
+
 def load_manifest_specs(manifest_path: Path) -> list[RunSpec]:
     df = load_run_manifest(manifest_path)
     validate_loaded_manifest(df, context="run_manifest")
     specs: list[RunSpec] = []
-    # TODO: Using pd.Series(df.iterrows()) re-wraps an iterator and can reorder or drop rows.
-    # TODO: Iterate directly: "for _, row in df.iterrows():" to preserve manifest order.
-    # Ref: https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.iterrows.html
-    for _, row in pd.Series(df.iterrows()):
+    for row in df.itertuples(index=False):
         specs.append(
             RunSpec(
-                run_id=row["run_id"],
-                algorithm=row["algorithm"].strip().lower(),
-                use_masking=bool(row["use_masking"]),
-                seed=None if pd.isna(row["seed"]) else int(row["seed"]),
-                split_id=row["split_id"],
-                model_path=row["model_path"],
-                trace_file=row["trace_file"],
-                topology_file=row["topology_file"],
-                node_file=row["node_file"],
+                run_id=row.run_id,  # type: ignore
+                treatment_id=row.treatment_id,  # type: ignore
+                algorithm=row.algorithm.strip().lower(),  # type: ignore
+                use_masking=bool(row.use_masking),  # type: ignore
+                window_size=int(row.window_size),  # type: ignore
+                tail_size=int(row.tail_size),  # type: ignore
+                seed=None if pd.isna(row.seed) else int(row.seed),  # type: ignore
+                split_id=row.split_id,  # type: ignore
+                model_path=row.model_path,  # type: ignore
+                trace_file=row.trace_file,  # type: ignore
+                topology_file=row.topology_file,  # type: ignore
+                node_file=row.node_file,  # type: ignore
             )
         )
     return specs
@@ -84,17 +93,17 @@ def validate_run_spec(spec: RunSpec) -> None:
     validate_not_holdout(spec.trace_file, context=spec.run_id, raise_error=True)
 
     if not Path(spec.model_path).exists():
-        raise FileNotFoundError(f"[{spec.run_id}] model_path not found: {spec.model_path}")
+        raise FileNotFoundError(
+            f"[{spec.run_id}] model_path not found: {spec.model_path}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Core evaluation logic
 # ---------------------------------------------------------------------------
 
+
 def build_env(spec: RunSpec, seed: int | None) -> HPCsim:
-    # TODO: window_size/tail_size are hard-coded; if training used different values,
-    # TODO: evaluation is not comparable. Use values from manifest/metadata or CLI.
-    # Ref: https://gymnasium.farama.org/
     return HPCsim(
         topology_file=f"data/topology/{spec.topology_file}",
         allocator="best_fit",
@@ -102,8 +111,8 @@ def build_env(spec: RunSpec, seed: int | None) -> HPCsim:
         trace_file=f"data/{spec.trace_file}",
         random_job=False,
         seed=seed,
-        window_size=512,
-        tail_size=64,
+        window_size=spec.window_size,
+        tail_size=spec.tail_size,
     )
 
 
@@ -134,15 +143,17 @@ def evaluate_one_run(
     while not (done or truncated):
         if max_steps is not None and n_steps >= max_steps:
             break
+
         t_dec0 = time.perf_counter()
-        # TODO: Ensure use_masking matches training config; a mismatch changes policy behavior
-        # TODO: and corrupts treatment_id grouping in aggregation/stats.
-        # Ref: https://sb3-contrib.readthedocs.io/
+
         if spec.use_masking:
             action_masks = get_action_masks(env)
-            action, _ = model.predict(obs, deterministic=deterministic, action_masks=action_masks)
+            action, _ = model.predict(
+                obs, deterministic=deterministic, action_masks=action_masks
+            )
         else:
             action, _ = model.predict(obs, deterministic=deterministic)
+
         decision_latencies.append(time.perf_counter() - t_dec0)
         obs, reward, done, truncated, _ = env.step(action)
         if not np.isfinite(reward):
@@ -151,15 +162,24 @@ def evaluate_one_run(
         n_steps += 1
 
     eval_wall_s = time.perf_counter() - t_start
-    max_w, avg_w = safe_metric_access(env.evaluator.waiting_time, (0.0, 0.0), "waiting_time")
-    max_s, avg_s = safe_metric_access(env.evaluator.bounded_slowdown, (0.0, 0.0), "bounded_slowdown")
-    avg_t = safe_metric_access(env.evaluator.average_turnaround, 0.0, "average_turnaround")
+    max_w, avg_w = safe_metric_access(
+        env.evaluator.waiting_time, (0.0, 0.0), "waiting_time"
+    )
+    max_s, avg_s = safe_metric_access(
+        env.evaluator.bounded_slowdown, (0.0, 0.0), "bounded_slowdown"
+    )
+    avg_t = safe_metric_access(
+        env.evaluator.average_turnaround, 0.0, "average_turnaround"
+    )
     cpu_util, gpu_util = safe_metric_access(env.utilization, (0.0, 0.0), "utilization")
 
     return EvalResult(
         run_id=spec.run_id,
+        treatment_id=spec.treatment_id,
         algorithm=spec.algorithm,
         use_masking=spec.use_masking,
+        window_size=spec.window_size,
+        tail_size=spec.tail_size,
         seed=seed,
         split_id=spec.split_id,
         model_path=spec.model_path,
@@ -168,7 +188,9 @@ def evaluate_one_run(
         node_file=spec.node_file,
         episode_reward=episode_reward,
         decision_count=n_steps,
-        decision_latency_mean_ms=float(np.mean(decision_latencies) * 1000.0) if decision_latencies else 0.0,
+        decision_latency_mean_ms=float(np.mean(decision_latencies) * 1000.0)
+        if decision_latencies
+        else 0.0,
         eval_wall_s=eval_wall_s,
         max_waiting=float(max_w),
         avg_waiting=float(avg_w),
@@ -185,14 +207,21 @@ def evaluate_one_run(
 # Output writers
 # ---------------------------------------------------------------------------
 
-def write_eval_outputs(output_dir: Path, result: EvalResult, metadata: dict[str, Any]) -> None:
+
+def write_eval_outputs(
+    output_dir: Path, result: EvalResult, metadata: dict[str, Any]
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = result.run_id
-    write_dict_outputs(result.__dict__, f"{run_id}_metrics", output_dir, as_json=True, as_csv=True)
+    write_dict_outputs(
+        result.__dict__, f"{run_id}_metrics", output_dir, as_json=True, as_csv=True
+    )
     write_json(metadata, output_dir / f"{run_id}_metadata.json")
 
 
-def write_summary(output_root: Path, results: list[EvalResult], failures: list[dict[str, str]]) -> None:
+def write_summary(
+    output_root: Path, results: list[EvalResult], failures: list[dict[str, str]]
+) -> None:
     summary = {
         "total_runs": len(results) + len(failures),
         "success_runs": len(results),
@@ -206,6 +235,7 @@ def write_summary(output_root: Path, results: list[EvalResult], failures: list[d
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     args = parse_args()
@@ -227,7 +257,7 @@ def main() -> None:
             sys.exit(0)
 
     if args.limit_runs is not None:
-        specs = specs[-args.limit_runs:]
+        specs = specs[-args.limit_runs :]
 
     results: list[EvalResult] = []
     failures: list[dict[str, str]] = []

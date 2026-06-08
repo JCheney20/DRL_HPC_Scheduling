@@ -1,4 +1,4 @@
-# Contributing to HPC-DRL-Scheduler
+# Contributing to DRL Scheduler Statistical Testbed
 
 Thank you for your interest in contributing! This project is part of an Honours research thesis, but contributions are welcome for:
 
@@ -10,7 +10,7 @@ Thank you for your interest in contributing! This project is part of an Honours 
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Fork the Repository
 
@@ -19,8 +19,8 @@ Click the "Fork" button at the top right of the GitHub page.
 ### 2. Clone Your Fork
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/HPC-DRL-Scheduler.git
-cd HPC-DRL-Scheduler
+git clone https://github.com/YOUR-USERNAME/<repo>.git
+cd <repo>
 ```
 
 ### 3. Set Up Development Environment
@@ -45,7 +45,7 @@ git checkout -b feature/your-feature-name
 
 ---
 
-## 📝 Code Style
+## Code Style
 
 ### Python
 
@@ -56,8 +56,8 @@ git checkout -b feature/your-feature-name
 
 **Format your code:**
 ```bash
-black training/ evaluation/ statistical_analysis/
-flake8 training/ evaluation/ statistical_analysis/ --max-line-length=88
+black src/
+flake8 src/ --max-line-length=88
 ```
 
 ### Naming Conventions
@@ -72,28 +72,28 @@ flake8 training/ evaluation/ statistical_analysis/ --max-line-length=88
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Before submitting a pull request:
 
 1. **Run existing tests:**
-   ```bash
-   pytest tests/
-   ```
+    ```bash
+    pytest tests/
+    ```
 
 2. **Add tests for new features:**
-   ```bash
-   # Create test file: tests/test_your_feature.py
-   ```
+    ```bash
+    # Create test file: tests/test_your_feature.py
+    ```
 
 3. **Smoke test your changes:**
-   ```bash
-   python training/scripts/train_agent.py --algorithm MaskablePPO --steps 1000
-   ```
+    ```bash
+    python src/train_agents.py --algo maskable_ppo --save_interval 1000 --total_saving 1 --seed 123456 --trace data/splits/physical_job_dev70.tsv
+    ```
 
 ---
 
-## 📄 Documentation
+## Documentation
 
 ### Code Documentation
 
@@ -130,7 +130,7 @@ If your contribution adds new features, update the main README:
 
 ---
 
-## 🔄 Pull Request Process
+## Pull Request Process
 
 ### 1. Commit Your Changes
 
@@ -194,7 +194,7 @@ Brief description of changes
 
 ---
 
-## 🐛 Reporting Bugs
+## Reporting Bugs
 
 ### Before Reporting
 
@@ -230,7 +230,7 @@ Logs, screenshots, etc.
 
 ---
 
-## 💡 Feature Requests
+## Feature Requests
 
 Use the "Feature Request" issue template:
 
@@ -250,13 +250,13 @@ Mockups, references, etc.
 
 ---
 
-## 📜 License
+## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Contributors will be acknowledged in:
 - `README.md` (Contributors section)
@@ -265,12 +265,12 @@ Contributors will be acknowledged in:
 
 ---
 
-## ❓ Questions?
+## Questions?
 
 - **Email:** [To be filled]
-- **GitHub Issues:** [Open a discussion issue]
-- **Pull Request Comments:** Tag `@[username]`
+- **GitHub Issues:** Open an issue or discussion
+- **Pull Request Comments:** Tag a reviewer
 
 ---
 
-**Thank you for contributing to reproducible HPC scheduling research!** 🎓
+**Thank you for contributing to reproducible HPC scheduling research!**
