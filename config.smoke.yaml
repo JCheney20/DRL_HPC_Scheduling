@@ -17,8 +17,29 @@ seeds: [42, 123, 456]                   # 2 seeds sufficient for smoke
 # --- Algorithms --------------------------------------------------------------
 algorithms:
   - "ppo"
+  # - "a2c"
+  # - "dqn"
+  # - "maskable_ppo"
   - "maskable_a2c"
   - "maskable_dqn"
+
+# --- Baseline -----------------------------------------------------------------
+trad_algorithms:
+  # - "fcfs"
+  - "lcfs"
+  # - "sjf"
+  # - "wfp3"
+  # - "unicep"
+  # - "f_1"
+  # - "f_2"
+
+baseline_only: False
+
+# -- Allocator -----------------------------------------------------------------
+allocators:
+  - "best_fit"
+  # - "topology_aware"
+  # - "first_available
 
 # --- Training hyperparameters ------------------------------------------------
 save_interval: 1000

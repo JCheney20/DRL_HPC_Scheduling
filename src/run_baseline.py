@@ -1,7 +1,5 @@
 import argparse 
 import json 
-import subprocess 
-import sys 
 import time
 import pandas as pd
 from pathlib import Path
@@ -20,11 +18,6 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: str, force: bool
     Path(result_dir).mkdir(parents=True, exist_ok=True)
     out_csv     = Path(result_dir) / f"{run_id}_metrics.csv"
     out_metrics     = Path(result_dir) / f"{run_id}_metrics.json"
-
-    if out_metrics.exists() and not force:
-        print(f"[{partition}] {algorithm} — SKIP (already exists)")
-        with open(out_metrics) as f:
-            return json.load(f)
 
     t0 = time.time()
     env = HPCsim(
@@ -53,6 +46,10 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: str, force: bool
         "use_masking": False,
         "window_size": 0,
         "tail_size": 0,
+        "model_path": "",
+        "trace_file": str(row["trace_file"]),
+        "topology_file": str(row["topology_file"]),
+        "node_file": str(row["node_file"]),
         "seed": seed,
         "split_id": split_id,
         "episode_reward": 0.0,
@@ -123,20 +120,20 @@ def print_summary_table(results: list[dict]) -> None:
     print()
 
 
-def run_visualise(result_dir: str, plots_dir: str, partitions: list[str], show: bool) -> None:
-    for partition in partitions:
-        subdir      = str(Path(result_dir) / partition)
-        plots_subdir = str(Path(plots_dir) / partition)
-        cmd = [
-            sys.executable, "visualise.py",
-            "--result-dir", subdir,
-            "--plots-dir",  plots_subdir,
-            "--mode", "multi",
-        ]
-        if not show:
-            cmd.append("--no-show")
-        print(f"\n[visualise] {partition} → {plots_subdir}")
-        subprocess.run(cmd, check=True)
+# def run_visualise(result_dir: str, plots_dir: str, partitions: list[str], show: bool) -> None:
+#     for partition in partitions:
+#         subdir      = str(Path(result_dir) / partition)
+#         plots_subdir = str(Path(plots_dir) / partition)
+#         cmd = [
+#             sys.executable, "visualise.py",
+#             "--result-dir", subdir,
+#             "--plots-dir",  plots_subdir,
+#             "--mode", "multi",
+#         ]
+#         if not show:
+#             cmd.append("--no-show")
+#         print(f"\n[visualise] {partition} → {plots_subdir}")
+#         subprocess.run(cmd, check=True)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -212,6 +209,19 @@ def main():
     treatment_id = f"{args.algorithm}__mask_false"
     trace = f"data/splits/{args.split_id}.tsv"
     manifest_path = Path(args.manifest_path)
+    # out_metrics = Path(args.result_dir) / args.partition / f"<run_id>_metrics.json"
+    result_path = Path(args.result_dir) / args.partition
+
+    if manifest_path.exists():
+        existing = pd.read_csv(manifest_path)
+        already_run = existing[
+            (existing["algorithm"] == args.algorithm) &
+            (existing["split_id"] == args.split_id) &
+            (existing["seed"].astype(str) == str(args.seed))
+        ]
+        if not already_run.empty and not args.force:
+            print(f"[SKIP] {args.algorithm} seed={args.seed} already in manifest")
+            return
 
     run_id = write_manifest_entry(
         treatment_id=treatment_id,
@@ -228,11 +238,10 @@ def main():
         manifest_path=manifest_path
     )
 
-    manifest = pd.Series(pd.read_csv(manifest_path))
+    manifest = pd.read_csv(manifest_path)
     row = manifest.loc[manifest["run_id"] == run_id].iloc[0].to_dict()
 
     run_one(row, run_id, args.partition, args.result_dir, args.force)
-    run_visualise(args.result_dir, args.plots_dir, [args.partition], show=not args.no_show)
 
 if __name__ == "__main__":
     main()

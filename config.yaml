@@ -6,8 +6,6 @@
 #   Smoke test: snakemake --configfile config.smoke.yaml
 # =============================================================================
 
-
-
 # --- Slurm ---------------------------------------------------------------
 executor: slurm
 use-singularity: true
@@ -39,8 +37,23 @@ algorithms:
   - "maskable_a2c"
   - "maskable_dqn"
 
+# --- Baseline -----------------------------------------------------------------
 trad_algorithms:
-  - ""
+  # - "fcfs"
+  - "lcfs"
+  - "sjf"
+  # - "wfp3"
+  - "unicep"
+  # - "f_1"
+  # - "f_2"
+  #
+baseline_only: False
+
+# -- Allocator -----------------------------------------------------------------
+allocators:
+  - "best_fit"
+  # - "topology_aware"
+  # - "first_available
 
 # --- Training hyperparameters ------------------------------------------------
 save_interval: 100000
@@ -61,3 +74,4 @@ bootstrap_seed: 42
 # --- Evaluation --------------------------------------------------------------
 eval_deterministic: true
 eval_max_steps: null               # null = full episode; integer = early stop
+

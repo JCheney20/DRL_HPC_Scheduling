@@ -50,9 +50,9 @@ ALGORITHMS      = [x for x in config["algorithms"] if x in VALID_ALGORITHMS]
 TRAD_ALGORITHMS = [x for x in config["trad_algorithms"] if x in VALID_TRAD_ALGORITHMS] 
 SAVE_INTERVAL   = config["save_interval"]
 TOTAL_SAVING    = config["total_saving"]
-WINDOW_SIZE     = config["window_size"]
-BUFFER_SIZE     = config["buffer_size"]
-TAIL_SIZE       = config["tail_size"]
+WINDOW_SIZE     = config.get("window_size", 512)
+TAIL_SIZE       = config.get("tail_size", 64)
+BUFFER_SIZE     = config.get("tail_size", 100_000)
 TOPOLOGY_FILE   = config["topology_file"]
 NODE_FILE       = config["node_file"]
 ALPHA           = config["alpha"]
@@ -157,7 +157,6 @@ rule train_seed:
         split_meta=SPLIT_META,
     output:
         marker=touch(f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete"),
-        # manifest="logs/run_log.csv",
     log:
         f"logs/snakemake/{TRACE_NAME}/train_seed_{{seed}}.log",
     params:
@@ -171,13 +170,11 @@ rule train_seed:
         node=NODE_FILE,
         trace=SPLIT_ID,
         trace_name=TRACE_NAME,
-    # TODO: split_id passed to train_agents.py must be a token (e.g., physical_job_r70),
-    # TODO: not a filename with .json. Using a filename breaks load_split_metadata.
-    # Ref: https://docs.python.org/3/library/pathlib.html
     wildcard_constraints:
         seed=r"\d+",
     shell:
         """
+        set -e
         mkdir -p trained_model/{params.trace_name}/{wildcards.seed}
 
         for algo in {params.algorithms}; do
@@ -186,7 +183,7 @@ rule train_seed:
                 --algorithm "$algo" \
                 --seed {wildcards.seed} \
                 --trace splits/{SPLIT_ID}.tsv \
-                --split_id {TRACE_NAME}_r70.json \
+                --split_id {TRACE_NAME}_r70 \
                 --save_interval {params.save_interval} \
                 --total_saving {params.total_saving} \
                 --window {params.window_size} \
@@ -216,6 +213,7 @@ rule eval_seed:
         slurm_partition="cpu"
     input:
         marker=f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete"
+        manifest="logs/run_log.csv"
     output:
         marker=touch(f"result/{TRACE_NAME}/eval_runs/.seed_{{seed}}_complete"),
     log:
@@ -224,17 +222,12 @@ rule eval_seed:
         eval_root=f"result/{TRACE_NAME}/eval_runs",
         max_steps_flag=EVAL_MAX_STEPS_FLAG,
         deterministic_flag=("--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic"),
-    # TODO: Define manifest input explicitly (logs/run_log.csv) to avoid undefined {input.manifest}.
-    # TODO: Add filter_seed param so --filter-seed has a value; otherwise eval runs all seeds.
-    # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#input-functions
+        filter_seed = lambda wildcards: wildcards.seed
     wildcard_constraints:
         seed=r"\d+",
     shell:
         """
-        # TODO: eval_root already includes "result/"; avoid "result/result" duplication.
-        # TODO: Use "mkdir -p {params.eval_root}/runs" instead.
-        # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#shellcmd
-        mkdir -p result/{params.eval_root}/runs
+        mkdir -p {params.eval_root}/runs
 
         python evaluate_agents.py \
             --manifest {input.manifest} \
@@ -264,7 +257,7 @@ rule aggregate:
             f"result/{TRACE_NAME}/eval_runs/.seed_{{seed}}_complete",
             seed=SEEDS,
         ),
-        # manifest="logs/run_log.csv",
+        manifest="logs/run_log.csv"
     output:
         eval_wide=f"result/{TRACE_NAME}/aggregate/eval_wide.csv",
         seed_summary=f"result/{TRACE_NAME}/aggregate/seed_summary.csv",
@@ -327,7 +320,7 @@ rule stats:
 # RULE baseline_comparison — Optional traditional scheduler baseline
 # =============================================================================
 
-rule baseline_comparison:
+rule baseline:
     """
     Run traditional scheduling baseline (FCFS + best_fit) for comparison.
     Optional: only runs if explicitly requested.
@@ -344,21 +337,24 @@ rule baseline_comparison:
         f"logs/snakemake/{TRACE_NAME}/baseline.log",
     params:
         output_dir=f"result/{TRACE_NAME}/baseline",
-        selectors=" ".join(BASELINE_SELECTORS),
-        allocators=" ".join(BASELINE_ALLOCATORS),
+        algorithm=" ".join(TRAD_ALGORITHMS_STR),
+        partition=TRACE_NAME,
+    wildcard_constraints:
+        seed=r"\d+",
     shell:
         """
-        python run_baseline.py \
-            --selector fcfs \
-            --allocator best_fit \
-            --trace {input.dev_split} \
-            --output {params.output_dir} \
-            >> {log} 2>&1
+        for algo in {params.algorithms}; do
+          python run_baseline.py \
+              --algorithm algo \
+              --seed \
+              --split_id {input.dev_split} \
+              --partition {params.partition} \ 
+              --result-dir {params.output_dir} \
+              --manifest-path "logs/baseline_run_log.csv" \
+              --force False \
+              >> {log} 2>&1
+        done
         """
-    # TODO: Expose baseline selectors/allocators via config and pass into run_baseline.py.
     # TODO: Add baseline-only entrypoint (baseline_only=true) to skip training and run eval+aggregate+stats.
     # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/configuration.html
-    # TODO: Integrate baselines into eval/aggregate/stats path with treatment_id = "{algorithm}__mask_{use_masking}".
-    # TODO: Baselines should skip training but still produce eval_wide-compatible rows.
-    # TODO: Include baselines in stats by default; only skip tests when preconditions fail.
     # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html

@@ -40,6 +40,15 @@ TRACE := env_var_or_default("TRACE", "physical_job")
     echo "  export_dag_detail    - Export job-level DAG (detailed)"
     echo "  export_dag_overview  - Export rule-level DAG (clean)"
     echo ""
+    echo "SLURM TARGETS:"
+    echo "  dry_run_smoke_slurm  - Validate smoke DAG for cluster"
+    echo "  dry_run_slurm        - Validate production DAG for cluster"
+    echo "  run_smoke_slurm      - Submit smoke test to SLURM"
+    echo "  run_full_slurm       - Submit full pipeline to SLURM"
+    echo "  run_full_with_base_slurm - Submit full pipeline + baseline to SLURM"
+    echo "  slurm_report         - Generate efficiency report after run"
+    echo "  build_sif            - Build Apptainer .sif from Nix flake"
+    echo ""
     echo "MAINTENANCE:"
     echo "  clean                - Remove all outputs except data and logs"
     echo "  clean_all            - Remove all outputs including logs"
@@ -108,8 +117,67 @@ TRACE := env_var_or_default("TRACE", "physical_job")
 
 @test_stats:
     echo "Generating synthetic seed summary..."
-    echo "Stats smoke test requires src/scripts/generate_synthetic_seed_summary.py"
-    echo "TODO: add the script, then re-enable this target"
+    python scripts/generate_synthetic_seed_summary.py \
+        --output result/stats_smoke/synthetic_seed_summary.csv \
+        --n-algorithms 6 \
+        --n-seeds 5 \
+        --seed 42
+    echo "Running statistical_test.py on synthetic data..."
+    python statistical_test.py \
+        --input result/stats_smoke/synthetic_seed_summary.csv \
+        --output-dir result/stats_smoke \
+        --bootstrap-reps 100 \
+        --bootstrap-seed 42
+    echo "✓ Stats smoke test complete. Outputs in result/stats_smoke/"
+
+# =============================================================================
+# SLURM CLUSTER TARGETS
+# =============================================================================
+
+@dry_run_smoke_slurm:
+    echo "Validating smoke DAG for cluster (no execution)..."
+    snakemake --configfile config.smoke.yaml --profile herasched --dry-run --quiet
+
+@dry_run_slurm:
+    echo "Validating production DAG for cluster (no execution)..."
+    snakemake --configfile config.yaml --profile herasched --dry-run --quiet
+
+@run_smoke_slurm:
+    echo "Submitting smoke test to SLURM on {{TRACE}}..."
+    snakemake \
+        --configfile config.smoke.yaml \
+        --config trace_name={{TRACE}} \
+        --profile herasched
+    echo "✓ Smoke jobs submitted. Check squeue for status."
+
+@run_full_slurm:
+    echo "Submitting full pipeline to SLURM on {{TRACE}}..."
+    snakemake \
+        --configfile config.yaml \
+        --config trace_name={{TRACE}} \
+        --profile herasched
+    echo "✓ Full pipeline submitted. Check squeue for status."
+
+@run_full_with_base_slurm:
+    echo "Submitting full pipeline + baseline to SLURM on {{TRACE}}..."
+    snakemake \
+        --configfile config.yaml \
+        --config trace_name={{TRACE}} \
+        result/{{TRACE}}/stats/stats_summary.json \
+        result/{{TRACE}}/baseline/baseline_metadata.json \
+        --profile herasched
+    echo "✓ Submitted. Check squeue for status."
+
+@slurm_report:
+    echo "Generating SLURM efficiency report..."
+    snakemake --configfile config.yaml --profile herasched --slurm-efficiency-report
+
+@build_sif:
+    echo "Building Apptainer .sif from Nix flake..."
+    nix build .#container
+    apptainer pull herasched.sif docker-archive://$(readlink result)
+    echo "✓ herasched.sif ready"
+
 
 # =============================================================================
 # DAG EXPORT TARGETS
@@ -164,7 +232,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
 
 @nix_develop:
     echo "Entering Nix develop environment..."
-    nix develop
+    nix develop -L
 
 # =============================================================================
 # NOTES
@@ -172,7 +240,5 @@ TRACE := env_var_or_default("TRACE", "physical_job")
 # Environment:      Nix (nix develop required before running)
 # Snakemake:        9.4.3+
 # just:             https://just.systems/man/en/
-#
-# TODO (future): Add Slurm profile for HPC cluster submission
 # TODO (future): Add Conda support as alternative to Nix
 # =============================================================================
