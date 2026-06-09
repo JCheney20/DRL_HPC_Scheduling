@@ -38,11 +38,16 @@ from pathlib import Path
 # without a configfile.
 # =============================================================================
 
+VALID_ALGORITHMS = ["dqn", "a2c", "ppo", "maskable_dqn", "maskable_a2c","maskable_ppo"]
+VALID_TRAD_ALGORITHMS = ["fcfs", "lcfs", "sjf", "wfp3", "unicep", "f_1", "f_2"]
+
 configfile: "config.yaml"
+container: config["container"]
 
 TRACE_NAME      = config["trace_name"]
 SEEDS           = config["seeds"]
-ALGORITHMS      = config["algorithms"]
+ALGORITHMS      = [x for x in config["algorithms"] if x in VALID_ALGORITHMS] 
+TRAD_ALGORITHMS = [x for x in config["trad_algorithms"] if x in VALID_TRAD_ALGORITHMS] 
 SAVE_INTERVAL   = config["save_interval"]
 TOTAL_SAVING    = config["total_saving"]
 WINDOW_SIZE     = config["window_size"]
@@ -51,13 +56,9 @@ TAIL_SIZE       = config["tail_size"]
 TOPOLOGY_FILE   = config["topology_file"]
 NODE_FILE       = config["node_file"]
 ALPHA           = config["alpha"]
-BOOTSTRAP_REPS  = config["bootstrap_reps"]
-BOOTSTRAP_SEED  = config["bootstrap_seed"]
 EVAL_MAX_STEPS  = config.get("eval_max_steps", None)
 EVAL_DETERMINISTIC = config.get("eval_deterministic", True)
 BASELINE_ONLY = config.get("baseline_only", False)
-BASELINE_SELECTORS = config.get("baseline_selectors", ["fcfs", "lcfs", "sjf"])
-BASELINE_ALLOCATORS = config.get("baseline_allocators", ["best_fit"])
 
 # Derived paths
 RAW_TRACE    = f"data/{TRACE_NAME}.csv"
@@ -69,6 +70,7 @@ SPLIT_META   = f"data/splits/logs/{TRACE_NAME}_r70.json"
 
 # Algorithms string for shell loops
 ALGORITHMS_STR = " ".join(ALGORITHMS)
+TRAD_ALGORITHMS_STR = " ".join(TRAD_ALGORITHMS)
 
 # Optional eval max-steps flag
 EVAL_MAX_STEPS_FLAG = f"--max-steps {EVAL_MAX_STEPS}" if EVAL_MAX_STEPS else ""
@@ -86,10 +88,10 @@ if not Path(RAW_TRACE).exists():
     raise FileNotFoundError(f"Raw trace not found: {RAW_TRACE}")
 
 REQUIRED_SCRIPTS = [
-    "src/train_agents.py",
-    "src/evaluate_agents.py",
-    "src/aggregate_results.py",
-    "src/statistical_test.py",
+    "train_agents.py",
+    "evaluate_agents.py",
+    "aggregate_results.py",
+    "statistical_test.py",
 ]
 for script in REQUIRED_SCRIPTS:
     if not Path(script).exists():
@@ -100,6 +102,7 @@ for script in REQUIRED_SCRIPTS:
 # RULE all — Default target
 # =============================================================================
 
+localrules: make_split
 rule all:
     """Full pipeline target: train → eval → aggregate → stats."""
     input:
@@ -144,6 +147,11 @@ rule train_seed:
     Parallelisation: seeds run in parallel, algorithms run sequentially
     within each seed to avoid manifest write conflicts on run_log.csv.
     """
+     resources:
+        mem_mb=16000,
+        runtime=480,
+        slurm_partition="gpu",
+        slurm_extra="--gres=gpu:1"
     input:
         dev_split=DEV_SPLIT,
         split_meta=SPLIT_META,
@@ -174,7 +182,7 @@ rule train_seed:
 
         for algo in {params.algorithms}; do
             echo "[train_seed] seed={wildcards.seed} algo=$algo" >> {log}
-            python src/train_agents.py \
+            python train_agents.py \
                 --algorithm "$algo" \
                 --seed {wildcards.seed} \
                 --trace splits/{SPLIT_ID}.tsv \
@@ -202,6 +210,10 @@ rule eval_seed:
     Uses --filter-seed to evaluate only runs matching this seed from the manifest.
     Depends on train_seed marker to ensure training completed first.
     """
+    resources:
+        mem_mb=8000,
+        runtime=120,
+        slurm_partition="cpu"
     input:
         marker=f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete"
     output:
@@ -224,7 +236,7 @@ rule eval_seed:
         # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#shellcmd
         mkdir -p result/{params.eval_root}/runs
 
-        python src/evaluate_agents.py \
+        python evaluate_agents.py \
             --manifest {input.manifest} \
             --output-dir {params.eval_root} \
             --filter-seed {params.filter_seed} \
@@ -243,6 +255,10 @@ rule aggregate:
     Aggregate eval outputs from all seeds into summary tables.
     Waits for all eval_seed rules via expand().
     """
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="cpu"
     input:
         eval_markers=expand(
             f"result/{TRACE_NAME}/eval_runs/.seed_{{seed}}_complete",
@@ -261,7 +277,7 @@ rule aggregate:
         output_dir=f"result/{TRACE_NAME}/aggregate",
     shell:
         """
-        python src/aggregate_results.py \
+        python aggregate_results.py \
             --manifest {input.manifest} \
             --eval-root {params.eval_root} \
             --output-dir {params.output_dir} \
@@ -279,31 +295,30 @@ rule stats:
     Tests: Shapiro-Wilk, Friedman, Conover post-hoc, Kendall W,
            VDA, bootstrap CIs, CD diagram input.
     """
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="cpu"
     input:
         seed_summary=f"result/{TRACE_NAME}/aggregate/seed_summary.csv",
     output:
         stats_summary=f"result/{TRACE_NAME}/stats/stats_summary.json",
-        pairwise_conover=f"result/{TRACE_NAME}/stats/pairwise_conover.csv",
+        pairwise_nemenyi=f"result/{TRACE_NAME}/stats/pairwise_nemenyi.csv",   # was pairwise_conover
+        confidence_intervals=f"result/{TRACE_NAME}/stats/confidence_intervals.csv",  # new
+        page_trend=f"result/{TRACE_NAME}/stats/page_trend.csv",               # new
         cd_diagram=f"result/{TRACE_NAME}/stats/cd_diagram_input.csv",
         stats_meta=f"result/{TRACE_NAME}/stats/stats_meta.json",
-    # TODO: Update output filenames to match stats pipeline: pairwise_nemenyi.csv, page_trend.csv.
-    # TODO: Keep filenames consistent with AGENTS.md statistical framework.
-    # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#output-files
     log:
         f"logs/snakemake/{TRACE_NAME}/stats.log",
     params:
         output_dir=f"result/{TRACE_NAME}/stats",
         alpha=ALPHA,
-        bootstrap_reps=BOOTSTRAP_REPS,
-        bootstrap_seed=BOOTSTRAP_SEED,
     shell:
         """
-        python src/statistical_test.py \
+        python statistical_test.py \
             --input {input.seed_summary} \
             --output-dir {params.output_dir} \
             --alpha {params.alpha} \
-            --bootstrap-reps {params.bootstrap_reps} \
-            --bootstrap-seed {params.bootstrap_seed} \
             >> {log} 2>&1
         """
 
@@ -333,7 +348,7 @@ rule baseline_comparison:
         allocators=" ".join(BASELINE_ALLOCATORS),
     shell:
         """
-        python src/run_baseline.py \
+        python run_baseline.py \
             --selector fcfs \
             --allocator best_fit \
             --trace {input.dev_split} \
