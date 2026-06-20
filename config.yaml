@@ -38,6 +38,7 @@ algorithms:
   - "maskable_dqn"
 
 # --- Baseline -----------------------------------------------------------------
+baseline_only: False
 trad_algorithms:
   # - "fcfs"
   - "lcfs"
@@ -46,14 +47,12 @@ trad_algorithms:
   - "unicep"
   # - "f_1"
   # - "f_2"
-  #
-baseline_only: False
-
+  
 # -- Allocator -----------------------------------------------------------------
 allocators:
   - "best_fit"
   # - "topology_aware"
-  # - "first_available
+  # - "first_available"
 
 # --- Training hyperparameters ------------------------------------------------
 save_interval: 100000
@@ -68,10 +67,35 @@ node_file: "nodes.csv"
 
 # --- Statistical test parameters ---------------------------------------------
 alpha: 0.05
-bootstrap_reps: 10000
-bootstrap_seed: 42
 
 # --- Evaluation --------------------------------------------------------------
 eval_deterministic: true
 eval_max_steps: null               # null = full episode; integer = early stop
+
+# --- Pareto Select -----------------------------------------------------------
+pareto_metrics:
+  - "avg_waiting"
+  - "avg_slowdown"
+  - "avg_turnaround"
+  - "max_waiting"
+  - "max_slowdown"
+  - "cpu_utilization"
+
+pareto_tiebreakers:
+  - "avg_waiting"
+  - "avg_slowdown"
+  - "cpu_utilization"
+
+# --- Visualisation -----------------------------------------------------------
+visualisation:
+  plots_enabled: true
+  tables_enabled: true
+  cd_diagrams: true
+  confidence_curves: true
+  bar_graphs: true
+  spider_diagrams: false
+  heatmaps: false
+
+
+
 

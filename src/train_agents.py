@@ -29,8 +29,8 @@ from typing import Any
 import numpy as np
 from torch import nn, manual_seed
 
-from src.HPCsim.HPCsim import HPCsim
-from src.utils import (
+from HPCsim.HPCsim import HPCsim
+from utils import (
     ALGORITHMS,
     ArgumentParserWithDefaults,
     build_train_metadata,
@@ -199,7 +199,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    args.split_id = Path(args.split_id).stem if "." in args.split_id else args.split_id
+    if args.split_id is not None and "." in args.split_id: 
+        args.split_id = Path(args.split_id).stem    
     print(args)
     return args
 

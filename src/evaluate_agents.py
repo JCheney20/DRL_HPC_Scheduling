@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 from sb3_contrib.common.maskable.utils import get_action_masks
 
-from src.HPCsim.HPCsim import HPCsim
-from src.utils import (
+from HPCsim.HPCsim import HPCsim
+from utils import (
     ALGORITHMS,
     EvalResult,
     RunSpec,

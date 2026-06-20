@@ -1,20 +1,18 @@
 import argparse 
-import json 
 import time
+import os
 import pandas as pd
 from pathlib import Path
-from src.HPCsim.HPCsim import HPCsim
-from src.utils import PARTITION_CONFIGS, write_csv, write_json, write_manifest_entry
+from HPCsim.HPCsim import HPCsim
+from utils import PARTITION_CONFIGS, write_csv, write_json, write_manifest_entry
 
-def run_one(row: dict, run_id: str, partition: str, result_dir: str, force: bool) -> None:
+def run_one(row: dict, run_id: str, partition: str, result_dir: str) -> None:
     algorithm = str(row["algorithm"])
-    seed = None if pd.isna(row["seed"]) else int(row["seed"])
     trace_file = str(row["trace_file"])
     allocator  = "best_fit"
     split_id = row["split_id"] 
     use_masking = "false"
     treatment_id = f"{algorithm}__mask_{use_masking}" 
-    result_dir = str(Path(result_dir) / partition)
     Path(result_dir).mkdir(parents=True, exist_ok=True)
     out_csv     = Path(result_dir) / f"{run_id}_metrics.csv"
     out_metrics     = Path(result_dir) / f"{run_id}_metrics.json"
@@ -28,11 +26,14 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: str, force: bool
         node_file=str(row["node_file"]),
         trace_file=trace_file,
         partition=partition,
-        seed=seed,
         random_job=False,
     )
 
     env.run()  
+    os.replace(f"result/{algorithm}+{allocator}.csv", str(out_csv))
+
+    
+
     max_w, avg_w = env.evaluator.waiting_time()
     max_s, avg_s = env.evaluator.bounded_slowdown()
     avg_t        = env.evaluator.average_turnaround()
@@ -50,7 +51,6 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: str, force: bool
         "trace_file": str(row["trace_file"]),
         "topology_file": str(row["topology_file"]),
         "node_file": str(row["node_file"]),
-        "seed": seed,
         "split_id": split_id,
         "episode_reward": 0.0,
         "decision_count": 0,
@@ -119,22 +119,6 @@ def print_summary_table(results: list[dict]) -> None:
             print(row_str)
     print()
 
-
-# def run_visualise(result_dir: str, plots_dir: str, partitions: list[str], show: bool) -> None:
-#     for partition in partitions:
-#         subdir      = str(Path(result_dir) / partition)
-#         plots_subdir = str(Path(plots_dir) / partition)
-#         cmd = [
-#             sys.executable, "visualise.py",
-#             "--result-dir", subdir,
-#             "--plots-dir",  plots_subdir,
-#             "--mode", "multi",
-#         ]
-#         if not show:
-#             cmd.append("--no-show")
-#         print(f"\n[visualise] {partition} → {plots_subdir}")
-#         subprocess.run(cmd, check=True)
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run all heuristic baseline combinations across partitions."
@@ -147,14 +131,6 @@ def parse_args() -> argparse.Namespace:
         help="Name of algorithm.",
         required=True,
         type=str,
-    )
-    parser.add_argument(
-        "--seed",
-        default=None,
-        dest="seed",
-        metavar="SEED",
-        help="Seed of run.",
-        type=int,
     )
     parser.add_argument(
         "--split_id",
@@ -183,18 +159,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to traditional algorithm manifest Default: logs/baseline_run_log.csv",
     )
     parser.add_argument(
-        "--plots-dir",
-        default="plots",
-        metavar="DIR",
-        help="Root directory for output plots. Default: plots/",
-    )
-    parser.add_argument(
-        "--no-show",
-        action="store_true",
-        default=False,
-        help="Skip plt.show() in visualise.py (headless/batch runs).",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -209,25 +173,23 @@ def main():
     treatment_id = f"{args.algorithm}__mask_false"
     trace = f"data/splits/{args.split_id}.tsv"
     manifest_path = Path(args.manifest_path)
-    # out_metrics = Path(args.result_dir) / args.partition / f"<run_id>_metrics.json"
     result_path = Path(args.result_dir) / args.partition
 
     if manifest_path.exists():
         existing = pd.read_csv(manifest_path)
         already_run = existing[
             (existing["algorithm"] == args.algorithm) &
-            (existing["split_id"] == args.split_id) &
-            (existing["seed"].astype(str) == str(args.seed))
+            (existing["split_id"] == args.split_id) 
         ]
         if not already_run.empty and not args.force:
-            print(f"[SKIP] {args.algorithm} seed={args.seed} already in manifest")
+            print(f"[SKIP] {args.algorithm} already in manifest")
             return
 
     run_id = write_manifest_entry(
         treatment_id=treatment_id,
         algorithm=args.algorithm,
         use_masking=use_masking,
-        seed=args.seed, 
+        seed=None, 
         window_size=0,
         tail_size=0, 
         split_id=args.split_id, 
@@ -240,8 +202,7 @@ def main():
 
     manifest = pd.read_csv(manifest_path)
     row = manifest.loc[manifest["run_id"] == run_id].iloc[0].to_dict()
-
-    run_one(row, run_id, args.partition, args.result_dir, args.force)
+    run_one(row, run_id, args.partition, result_path)
 
 if __name__ == "__main__":
     main()

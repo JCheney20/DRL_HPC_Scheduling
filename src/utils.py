@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -182,6 +181,18 @@ PARTITION_CONFIGS = {
     },
 }
 
+METRIC_DIRECTION: dict[str, str] = {
+    "avg_waiting": "lower_is_better",
+    "avg_slowdown": "lower_is_better",
+    "max_waiting": "lower_is_better",
+    "max_slowdown": "lower_is_better",
+    "avg_turnaround": "lower_is_better",
+    "cpu_utilization": "higher_is_better",
+    "gpu_utilization": "higher_is_better",
+    "episode_reward": "higher_is_better",
+    "decision_latency_mean_ms": "lower_is_better",
+    "eval_wall_s": "lower_is_better",
+}
 # ---------------------------------------------------------------------------
 # Argument parsing helpers
 # ---------------------------------------------------------------------------

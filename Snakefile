@@ -38,35 +38,39 @@ from pathlib import Path
 # without a configfile.
 # =============================================================================
 
-VALID_ALGORITHMS = ["dqn", "a2c", "ppo", "maskable_dqn", "maskable_a2c","maskable_ppo"]
+VALID_ALGORITHMS = ["dqn", "a2c", "ppo", "maskable_dqn", "maskable_a2c", "maskable_ppo"]
 VALID_TRAD_ALGORITHMS = ["fcfs", "lcfs", "sjf", "wfp3", "unicep", "f_1", "f_2"]
 
+
 configfile: "config.yaml"
+
+
 container: config["container"]
 
-TRACE_NAME      = config["trace_name"]
-SEEDS           = config["seeds"]
-ALGORITHMS      = [x for x in config["algorithms"] if x in VALID_ALGORITHMS] 
-TRAD_ALGORITHMS = [x for x in config["trad_algorithms"] if x in VALID_TRAD_ALGORITHMS] 
-SAVE_INTERVAL   = config["save_interval"]
-TOTAL_SAVING    = config["total_saving"]
-WINDOW_SIZE     = config.get("window_size", 512)
-TAIL_SIZE       = config.get("tail_size", 64)
-BUFFER_SIZE     = config.get("tail_size", 100_000)
-TOPOLOGY_FILE   = config["topology_file"]
-NODE_FILE       = config["node_file"]
-ALPHA           = config["alpha"]
-EVAL_MAX_STEPS  = config.get("eval_max_steps", None)
+
+TRACE_NAME = config["trace_name"]
+SEEDS = config["seeds"]
+ALGORITHMS = [x for x in config["algorithms"] if x in VALID_ALGORITHMS]
+TRAD_ALGORITHMS = [x for x in config["trad_algorithms"] if x in VALID_TRAD_ALGORITHMS]
+SAVE_INTERVAL = config["save_interval"]
+TOTAL_SAVING = config["total_saving"]
+WINDOW_SIZE = config.get("window_size", 512)
+TAIL_SIZE = config.get("tail_size", 64)
+BUFFER_SIZE = config.get("buffer_size", 100_000)
+TOPOLOGY_FILE = config["topology_file"]
+NODE_FILE = config["node_file"]
+ALPHA = config["alpha"]
+EVAL_MAX_STEPS = config.get("eval_max_steps", None)
 EVAL_DETERMINISTIC = config.get("eval_deterministic", True)
 BASELINE_ONLY = config.get("baseline_only", False)
 
 # Derived paths
-RAW_TRACE    = f"data/{TRACE_NAME}.csv"
-SPLIT_ID     = f"{TRACE_NAME}_dev70"
-HOLDOUT_ID   = f"{TRACE_NAME}_holdout30"
-DEV_SPLIT    = f"data/splits/{SPLIT_ID}.tsv"
+RAW_TRACE = f"data/{TRACE_NAME}.csv"
+SPLIT_ID = f"{TRACE_NAME}_dev70"
+HOLDOUT_ID = f"{TRACE_NAME}_holdout30"
+DEV_SPLIT = f"data/splits/{SPLIT_ID}.tsv"
 HOLDOUT_SPLIT = f"data/splits/{HOLDOUT_ID}.tsv"
-SPLIT_META   = f"data/splits/logs/{TRACE_NAME}_r70.json"
+SPLIT_META = f"data/splits/logs/{TRACE_NAME}_r70.json"
 
 # Algorithms string for shell loops
 ALGORITHMS_STR = " ".join(ALGORITHMS)
@@ -74,6 +78,11 @@ TRAD_ALGORITHMS_STR = " ".join(TRAD_ALGORITHMS)
 
 # Optional eval max-steps flag
 EVAL_MAX_STEPS_FLAG = f"--max-steps {EVAL_MAX_STEPS}" if EVAL_MAX_STEPS else ""
+
+PARETO_METRICS = config["pareto_metrics"]
+PARETO_TIEBREAKERS = config["pareto_tiebreakers"]
+
+VIS_CONFIG = config["visualisation"]
 
 # =============================================================================
 # INPUT VALIDATION (checked at DAG build time)
@@ -92,6 +101,7 @@ REQUIRED_SCRIPTS = [
     "evaluate_agents.py",
     "aggregate_results.py",
     "statistical_test.py",
+    "run_baseline.py",
 ]
 for script in REQUIRED_SCRIPTS:
     if not Path(script).exists():
@@ -102,19 +112,27 @@ for script in REQUIRED_SCRIPTS:
 # RULE all — Default target
 # =============================================================================
 
-localrules: make_split
-rule all:
-    """Full pipeline target: train → eval → aggregate → stats."""
-    input:
-        f"result/{TRACE_NAME}/stats/stats_summary.json",
-        # TODO: Add baseline stage outputs here once integrated (baseline eval/aggregate/stats).
-        # TODO: Baselines do not train; they must still emit eval/aggregate inputs for stats.
-        # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html
+localrules:
+    make_split,
 
+if BASELINE_ONLY:
+
+    rule all:
+        input:
+            f"result/{TRACE_NAME}/baseline/baseline_metadata.json",
+
+else:
+
+    rule all:
+        """Full pipeline target: train → eval → aggregate → stats."""
+        input:
+            f"result/{TRACE_NAME}/stats/stats_summary.json",
+            f"result/{TRACE_NAME}/.visualise_complete",
 
 # =============================================================================
 # RULE make_split — Create train/holdout splits (idempotent)
 # =============================================================================
+
 
 rule make_split:
     """
@@ -129,10 +147,12 @@ rule make_split:
         metadata=SPLIT_META,
     log:
         f"logs/snakemake/{TRACE_NAME}/make_split.log",
+    params:
+        trace_name=TRACE_NAME,
     shell:
         """
         python src/make_split.py \
-            --src {TRACE_NAME} \
+            --src {params.trace_name} \
             >> {log} 2>&1
         """
 
@@ -141,24 +161,28 @@ rule make_split:
 # RULE train_seed — Train all algorithms for one seed
 # =============================================================================
 
+
 rule train_seed:
     """
     Train all algorithms sequentially for a given seed on the DEV split.
     Parallelisation: seeds run in parallel, algorithms run sequentially
     within each seed to avoid manifest write conflicts on run_log.csv.
     """
-     resources:
-        mem_mb=16000,
-        runtime=480,
-        slurm_partition="gpu",
-        slurm_extra="--gres=gpu:1"
     input:
         dev_split=DEV_SPLIT,
         split_meta=SPLIT_META,
     output:
         marker=touch(f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete"),
+        manifest="logs/run_log.csv",
     log:
         f"logs/snakemake/{TRACE_NAME}/train_seed_{{seed}}.log",
+    wildcard_constraints:
+        seed=r"\d+",
+    resources:
+        mem_mb=16000,
+        runtime=480,
+        slurm_partition="gpu",
+        slurm_extra="--gres=gpu:1",
     params:
         algorithms=ALGORITHMS_STR,
         save_interval=SAVE_INTERVAL,
@@ -170,11 +194,10 @@ rule train_seed:
         node=NODE_FILE,
         trace=SPLIT_ID,
         trace_name=TRACE_NAME,
-    wildcard_constraints:
-        seed=r"\d+",
     shell:
         """
-        set -e
+        set -e 
+
         mkdir -p trained_model/{params.trace_name}/{wildcards.seed}
 
         for algo in {params.algorithms}; do
@@ -182,7 +205,7 @@ rule train_seed:
             python train_agents.py \
                 --algorithm "$algo" \
                 --seed {wildcards.seed} \
-                --trace splits/{SPLIT_ID}.tsv \
+                --trace data/splits/{SPLIT_ID}.tsv \
                 --split_id {TRACE_NAME}_r70 \
                 --save_interval {params.save_interval} \
                 --total_saving {params.total_saving} \
@@ -201,38 +224,43 @@ rule train_seed:
 # RULE eval_seed — Evaluate trained models for one seed
 # =============================================================================
 
+
 rule eval_seed:
     """
     Evaluate all trained models for a specific seed.
     Uses --filter-seed to evaluate only runs matching this seed from the manifest.
     Depends on train_seed marker to ensure training completed first.
     """
-    resources:
-        mem_mb=8000,
-        runtime=120,
-        slurm_partition="cpu"
     input:
-        marker=f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete"
-        manifest="logs/run_log.csv"
+        marker=f"trained_model/{TRACE_NAME}/{{seed}}/.train_complete",
+        manifest="logs/run_log.csv",
     output:
         marker=touch(f"result/{TRACE_NAME}/eval_runs/.seed_{{seed}}_complete"),
     log:
         f"logs/snakemake/{TRACE_NAME}/eval_seed_{{seed}}.log",
+    wildcard_constraints:
+        seed=r"\d+",
+    resources:
+        mem_mb=8000,
+        runtime=120,
+        slurm_partition="cpu",
     params:
         eval_root=f"result/{TRACE_NAME}/eval_runs",
         max_steps_flag=EVAL_MAX_STEPS_FLAG,
-        deterministic_flag=("--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic"),
-        filter_seed = lambda wildcards: wildcards.seed
-    wildcard_constraints:
-        seed=r"\d+",
+        deterministic_flag=(
+            "--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic"
+        ),
+        filter_seed=lambda wildcards: wildcards.seed,
     shell:
         """
+        set -e 
+
         mkdir -p {params.eval_root}/runs
 
         python evaluate_agents.py \
             --manifest {input.manifest} \
             --output-dir {params.eval_root} \
-            --filter-seed {params.filter_seed} \
+            --filter-seed {wildcards.seed} \
             {params.deterministic_flag} \
             {params.max_steps_flag} \
             >> {log} 2>&1
@@ -243,21 +271,18 @@ rule eval_seed:
 # RULE aggregate — Merge all seed eval results
 # =============================================================================
 
+
 rule aggregate:
     """
     Aggregate eval outputs from all seeds into summary tables.
     Waits for all eval_seed rules via expand().
     """
-    resources:
-        mem_mb=8000,
-        runtime=60,
-        slurm_partition="cpu"
     input:
         eval_markers=expand(
             f"result/{TRACE_NAME}/eval_runs/.seed_{{seed}}_complete",
             seed=SEEDS,
         ),
-        manifest="logs/run_log.csv"
+        manifest="logs/run_log.csv",
     output:
         eval_wide=f"result/{TRACE_NAME}/aggregate/eval_wide.csv",
         seed_summary=f"result/{TRACE_NAME}/aggregate/seed_summary.csv",
@@ -265,6 +290,10 @@ rule aggregate:
         aggregate_meta=f"result/{TRACE_NAME}/aggregate/aggregate_metadata.json",
     log:
         f"logs/snakemake/{TRACE_NAME}/aggregate.log",
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="cpu",
     params:
         eval_root=f"result/{TRACE_NAME}/eval_runs/runs",
         output_dir=f"result/{TRACE_NAME}/aggregate",
@@ -282,27 +311,28 @@ rule aggregate:
 # RULE stats — Run statistical tests
 # =============================================================================
 
+
 rule stats:
     """
     Run full non-parametric statistical pipeline on seed_summary.csv.
     Tests: Shapiro-Wilk, Friedman, Conover post-hoc, Kendall W,
            VDA, bootstrap CIs, CD diagram input.
     """
-    resources:
-        mem_mb=8000,
-        runtime=60,
-        slurm_partition="cpu"
     input:
         seed_summary=f"result/{TRACE_NAME}/aggregate/seed_summary.csv",
     output:
         stats_summary=f"result/{TRACE_NAME}/stats/stats_summary.json",
-        pairwise_nemenyi=f"result/{TRACE_NAME}/stats/pairwise_nemenyi.csv",   # was pairwise_conover
-        confidence_intervals=f"result/{TRACE_NAME}/stats/confidence_intervals.csv",  # new
-        page_trend=f"result/{TRACE_NAME}/stats/page_trend.csv",               # new
+        pairwise_nemenyi=f"result/{TRACE_NAME}/stats/pairwise_nemenyi.csv",
+        confidence_intervals=f"result/{TRACE_NAME}/stats/confidence_intervals.csv",
+        page_trend=f"result/{TRACE_NAME}/stats/page_trend.csv",
         cd_diagram=f"result/{TRACE_NAME}/stats/cd_diagram_input.csv",
         stats_meta=f"result/{TRACE_NAME}/stats/stats_meta.json",
     log:
         f"logs/snakemake/{TRACE_NAME}/stats.log",
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="cpu",
     params:
         output_dir=f"result/{TRACE_NAME}/stats",
         alpha=ALPHA,
@@ -317,17 +347,11 @@ rule stats:
 
 
 # =============================================================================
-# RULE baseline_comparison — Optional traditional scheduler baseline
+# RULE baseline
 # =============================================================================
-
 rule baseline:
     """
-    Run traditional scheduling baseline (FCFS + best_fit) for comparison.
-    Optional: only runs if explicitly requested.
-
-    Usage:
-        snakemake result/{TRACE_NAME}/baseline/baseline_metadata.json \\
-            --configfile config.yaml
+    Run traditional scheduling baselines.
     """
     input:
         dev_split=DEV_SPLIT,
@@ -337,24 +361,69 @@ rule baseline:
         f"logs/snakemake/{TRACE_NAME}/baseline.log",
     params:
         output_dir=f"result/{TRACE_NAME}/baseline",
-        algorithm=" ".join(TRAD_ALGORITHMS_STR),
+        manifest_path="logs/baseline_run_log.csv",
+        algorithms=TRAD_ALGORITHMS_STR,
+        split_id=SPLIT_ID,
         partition=TRACE_NAME,
-    wildcard_constraints:
-        seed=r"\d+",
     shell:
         """
         for algo in {params.algorithms}; do
           python run_baseline.py \
-              --algorithm algo \
-              --seed \
-              --split_id {input.dev_split} \
-              --partition {params.partition} \ 
+              --algorithm "$algo" \
+              --split_id {params.split_id} \
+              --partition {params.partition} \
               --result-dir {params.output_dir} \
-              --manifest-path "logs/baseline_run_log.csv" \
-              --force False \
+              --manifest-path {params.manifest_path} \
               >> {log} 2>&1
         done
+        touch {output.baseline_meta}
         """
-    # TODO: Add baseline-only entrypoint (baseline_only=true) to skip training and run eval+aggregate+stats.
-    # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/configuration.html
-    # Ref: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html
+
+
+rule select_best:
+    input:
+        algo_summary=f"result/{TRACE_NAME}/aggregate/algorithm_summary.csv",
+    output:
+        best_algo_json=f"result/{TRACE_NAME}/best/best_algorithm.json",
+        marker=touch(f"result/{TRACE_NAME}/.select_best_complete"),
+    log:
+        f"logs/snakemake/{TRACE_NAME}/select_best.log",
+    params:
+        trace=TRACE_NAME,
+    shell:
+        """
+        python select_best.py \
+            --nemenyi result/{params.trace}/stats/pairwise_nemenyi.csv \
+            --seed-summary result/{params.trace}/aggregate/algorithm_summary.csv \
+            --output-dir result/{params.trace}/best/ \
+            >> {log} 2>&1
+        """
+
+
+rule visualise:
+    """
+    Generate all plots and tables from aggregate/stats outputs.
+    """
+    input:
+        marker=f"result/{TRACE_NAME}/.select_best_complete",
+        seed_summary=f"result/{TRACE_NAME}/aggregate/seed_summary.csv",
+        eval_wide=f"result/{TRACE_NAME}/aggregate/eval_wide.csv",
+        cd_input=f"result/{TRACE_NAME}/stats/cd_diagram_input.csv",
+        algo_summary=f"result/{TRACE_NAME}/aggregate/algorithm_summary.csv",
+        stats_summary=f"result/{TRACE_NAME}/stats/stats_summary.json",
+    output:
+        marker=touch(f"result/{TRACE_NAME}/.visualise_complete"),
+    log:
+        f"logs/snakemake/{TRACE_NAME}/visualise.log",
+    params:
+        trace=TRACE_NAME,
+    shell:
+        """
+        python visualise.py --mode results \
+            --trace-name {params.trace} \
+            --stats-dir result/{params.trace}/stats \
+            --aggregate-dir result/{params.trace}/aggregate \
+            --output-dir result/{params.trace} \
+            --no-show \
+            >> {log} 2>&1
+        """

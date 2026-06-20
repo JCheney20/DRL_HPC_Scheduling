@@ -47,10 +47,11 @@ import pandas as pd
 from scipy import stats
 import scikit_posthocs as sp
 
-from src.utils import (
+from utils import (
     ALGORITHMS,
     TRAD_ALGORITHMS,
     SEED_SUMMARY_REQUIRED_IDS,
+    METRIC_DIRECTION,
     build_run_metadata,
     interpret_stat,
     load_seed_summary,
@@ -87,18 +88,6 @@ ALL_METRICS = [
 ]
 
 
-METRIC_DIRECTION: dict[str, str] = {
-    "avg_waiting": "lower_is_better",
-    "avg_slowdown": "lower_is_better",
-    "max_waiting": "lower_is_better",
-    "max_slowdown": "lower_is_better",
-    "avg_turnaround": "lower_is_better",
-    "cpu_utilization": "higher_is_better",
-    "gpu_utilization": "higher_is_better",
-    "episode_reward": "higher_is_better",
-    "decision_latency_mean_ms": "lower_is_better",
-    "eval_wall_s": "lower_is_better",
-}
 
 KENDALL_W_THRESHOLDS = [
     (0.0, "Slight Agreement"),
@@ -845,6 +834,16 @@ def write_stats_outputs(
     write_csv(
         pd.DataFrame(all_wilcoxon) if all_wilcoxon else pd.DataFrame([]),
         out_dir / "confidence_intervals.csv",
+    )
+
+    all_curves: list[dict[str, Any]] = []
+    for result in results:
+        curves = result.get("confidence_curves", {})
+        if curves.get("performed"):
+            all_curves.extend(curves.get("curves", []))
+    write_csv(
+        pd.DataFrame(all_curves) if all_curves else pd.DataFrame([]),
+        out_dir / "confidence_curves.csv",
     )
 
     all_ranks: list[dict[str, Any]] = []
