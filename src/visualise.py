@@ -24,7 +24,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
-from scipy.stats import studentized_range
+import scikit_posthocs as sp
+from utils import TRAD_ALGORITHMS
 
 matplotlib.rcParams.update(
     {
@@ -151,24 +152,14 @@ def write_comparison_csv(alg_summary: pd.DataFrame, tables_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tables — full statistical pipeline coverage (new)
+# Tables — full statistical pipeline coverage
 # ---------------------------------------------------------------------------
-# Stages 3, 4, 6, 7 already exist as clean per-metric CSVs from
-# statistical_test.py's write_stats_outputs(); they just need copying into
-# tables_dir under a stable name so every stage lives in one place for
-# the paper. Stages 1, 2, 8 are nested inside stats_summary.json and need
-# flattening into tidy tables.
 
 def write_passthrough_stats_tables(data: dict[str, pd.DataFrame], tables_dir: Path) -> None:
-    """Stages 3, 4 — already tidy CSVs; copy as-is into tables_dir.
-
-    Stages 6 (Page trend) and 7 (CD diagram inputs) are intentionally excluded
-    here — they are plot-only (see draw_page_trend, draw_cd_diagrams) and
-    already render meaningfully as figures rather than standalone tables.
-    """
+    """Stages 3, 4 — already tidy CSVs; copy as-is into tables_dir."""
     passthroughs = {
-        "pairwise_nemenyi": data["pairwise_nemenyi"],          # stage 3 (Nemenyi post-hoc)
-        "confidence_intervals": data["confidence_intervals"],  # stage 4 (Wilcoxon NP CI)
+        "pairwise_nemenyi": data["pairwise_nemenyi"],          
+        "confidence_intervals": data["confidence_intervals"], 
     }
     for name, df in passthroughs.items():
         df.to_csv(tables_dir / f"{name}.csv", index=False)
@@ -221,8 +212,8 @@ def write_descriptive_stats(stats_summary: dict, tables_dir: Path) -> None:
 
 
 def write_all_stats_tables(stats_dir: Path, data: dict[str, pd.DataFrame], tables_dir: Path) -> None:
-    """Write a CSV table for every stage of the 8-step statistical pipeline."""
-    write_passthrough_stats_tables(data, tables_dir)          # stages 3, 4, 6, 7
+    """Write a CSV table for every TABLE-producing stage of the 8-step pipeline (stages 1, 2, 3, 4, 8)."""
+    write_passthrough_stats_tables(data, tables_dir)          # stages 3, 4
     stats_summary = load_stats_summary(stats_dir)
     write_shapiro_summary(stats_summary, tables_dir)          # stage 1
     write_friedman_summary(stats_summary, tables_dir)         # stage 2
@@ -233,53 +224,41 @@ def write_all_stats_tables(stats_dir: Path, data: dict[str, pd.DataFrame], table
 # Plots/Graphs
 # ---------------------------------------------------------------------------
 
-def draw_cd_diagrams(cd_df: pd.DataFrame, seed_summary: pd.DataFrame, plots_dir: Path, alpha: float = 0.05) -> None:
-    """
-    cd_df: cd_diagram_input.csv columns: metric_name, treatment_id, algorithm, use_masking, avg_rank
-    seed_summary: seed_summary.csv (used to infer n = number of seeds per treatment)
-    """
-    n = seed_summary.groupby("treatment_id").size().iloc[0]
+def _build_sig_matrix(nemenyi_metric_df: pd.DataFrame, treatments: list[str]) -> pd.DataFrame:
+    treatment_set = set(treatments)
+    sig_matrix = pd.DataFrame(
+        np.ones((len(treatments), len(treatments))), index=treatments, columns=treatments
+    )
+    for _, row in nemenyi_metric_df.iterrows():
+        a, b = row["treatment_a"], row["treatment_b"]
+        if a not in treatment_set or b not in treatment_set:
+            continue
+        sig_matrix.loc[a, b] = row["p_value"]
+        sig_matrix.loc[b, a] = row["p_value"]
+    return sig_matrix
 
+
+def draw_cd_diagrams(cd_df: pd.DataFrame, nemenyi_df: pd.DataFrame, plots_dir: Path, alpha: float = 0.05) -> None:
     for metric in cd_df["metric_name"].unique():
-        metric_df = cd_df[cd_df["metric_name"] == metric].copy()
-        k = len(metric_df)
-        y = range(k)
+        metric_cd = cd_df[cd_df["metric_name"] == metric]
+        metric_nemenyi = nemenyi_df[nemenyi_df["metric_name"] == metric] if not nemenyi_df.empty else pd.DataFrame()
 
-        # Critical difference
-        q_alpha = studentized_range.ppf(1 - alpha, k, np.inf) / np.sqrt(2)
-        cd = q_alpha * np.sqrt(k * (k + 1) / (6 * n))
+        if metric_nemenyi.empty:
+            print(f"  No Nemenyi results for {metric} (Friedman not significant) -- skipping CD diagram.")
+            continue
 
-        # Sort by rank for clean plot
-        metric_df = metric_df.sort_values(by="avg_rank")
-        fig, ax = plt.subplots(figsize=(10, max(6, k * 0.6)))
+        ranks = metric_cd.set_index("treatment_id")["avg_rank"]
+        sig_matrix = _build_sig_matrix(metric_nemenyi, ranks.index.tolist())
 
-        ax.scatter(metric_df["avg_rank"], y, zorder=3, s=100, color="steelblue")
-        # Draw ±CD error bars
-        for i, (_, row) in enumerate(metric_df.iterrows()):
-            ax.errorbar(
-                row["avg_rank"], i, xerr=cd,
-                fmt='none', capsize=5, color='gray', alpha=0.5
-            )
-
-        ax.set_yticks(y)
-        ax.set_yticklabels(metric_df["treatment_id"])
-        ax.set_xlabel("Average Rank")
-        ax.set_title(f"CD Diagram — {metric} (α={alpha}, CD≈{cd:.2f})")
-        ax.grid(axis='x', alpha=0.3)
-        ax.invert_yaxis()  # Best rank at top
+        fig, ax = plt.subplots(figsize=(10, max(3, len(ranks) * 0.5)))
+        sp.critical_difference_diagram(ranks, sig_matrix, ax=ax, alpha=alpha)
+        ax.set_title(f"CD Diagram — {metric} (α={alpha})")
 
         save_figure(fig, plots_dir, f"cd_diagram_{metric}")
         plt.close(fig)
 
 
 def _parse_treatment_order(raw: str) -> list[str]:
-    """
-    page_trend.csv stores `treatment_order` as whatever string the source
-    list serialised to when written via pandas (statistical_test.py's
-    run_page_trend_test() produces a Python list, which pandas writes as
-    its repr, e.g. "['a', 'b']"). Try the list-repr form first via
-    ast.literal_eval, falling back to a plain comma-split for safety.
-    """
     try:
         parsed = ast.literal_eval(raw)
         if isinstance(parsed, (list, tuple)):
@@ -290,16 +269,6 @@ def _parse_treatment_order(raw: str) -> list[str]:
 
 
 def draw_page_trend(page_trend_df: pd.DataFrame, cd_df: pd.DataFrame, plots_dir: Path, alpha: float = 0.05) -> None:
-    """
-    Plot the Page trend test as a rank staircase: average rank per treatment,
-    ordered along the x-axis by the pre-declared `treatment_order` (not by
-    rank). A monotone staircase visually confirms the trend the test detects.
-
-    page_trend_df: page_trend.csv columns: metric_name, performed, statistic,
-        p_value, significant, treatment_order (see _parse_treatment_order
-        for why this needs defensive parsing).
-    cd_df: cd_diagram_input.csv, supplies avg_rank per (metric_name, treatment_id).
-    """
     if page_trend_df.empty:
         print("No Page trend results to plot.")
         return
@@ -318,13 +287,13 @@ def draw_page_trend(page_trend_df: pd.DataFrame, cd_df: pd.DataFrame, plots_dir:
         ax.set_xticks(x)
         ax.set_xticklabels(order, rotation=45, ha="right")
         ax.set_ylabel("Average Rank")
-        ax.set_xlabel("Declared Treatment Order")
+        ax.set_xlabel(f"Declared Treatment Order (predicted: {row['trend_direction']})")
         sig_label = "significant" if row["significant"] else "not significant"
         ax.set_title(
             f"Page Trend — {metric} "
             f"(statistic={row['statistic']:.2f}, p={row['p_value']:.4f}, {sig_label})"
         )
-        ax.grid(alpha=0.3)
+        ax.grid(alpha=alpha)
 
         save_figure(fig, plots_dir, f"page_trend_{metric}")
         plt.close(fig)
@@ -360,11 +329,6 @@ def draw_confidence_curves(curves_df: pd.DataFrame, plots_dir: Path, alpha: floa
         plt.close(fig)
 
 
-def is_baseline(tid: str) -> bool:
-    baselines = ["fcfs", "lcfs", "sjf", "wfp3", "unicep", "f_1", "f_2"]
-    return any(b in tid.lower() for b in baselines)
-
-
 def draw_bar_graphs(seed_summary: pd.DataFrame, plots_dir: Path) -> None:
     """Draw bar graph per metric: mean ± std per treatment, DRL vs baseline colors."""
 
@@ -377,7 +341,7 @@ def draw_bar_graphs(seed_summary: pd.DataFrame, plots_dir: Path) -> None:
         )
         df.columns = ["treatment_id", "mean", "std"]
 
-        colors = ["coral" if is_baseline(tid) else "steelblue" for tid in df["treatment_id"]]
+        colors = ["coral" if any(b in tid.lower() for b in TRAD_ALGORITHMS) else "steelblue" for tid in df["treatment_id"]]
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.bar(df["treatment_id"], df["mean"], yerr=df["std"],
@@ -403,8 +367,8 @@ def draw_bar_graphs(seed_summary: pd.DataFrame, plots_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-
-def run_results_mode(args: argparse.Namespace) -> None:
+def main() -> None:
+    args = parse_args()
     output_dir = Path(args.output_dir.format(trace_name=args.trace_name))
     stats_dir = Path(args.stats_dir.format(trace_name=args.trace_name))
     aggregate_dir = Path(args.aggregate_dir.format(trace_name=args.trace_name))
@@ -420,7 +384,7 @@ def run_results_mode(args: argparse.Namespace) -> None:
         write_metric_tables(data["seed_summary"], tables_dir)
 
     if not args.skip_cd:
-        draw_cd_diagrams(data["cd_input"], data["seed_summary"], plots_dir)
+        draw_cd_diagrams(data["cd_input"], data["pairwise_nemenyi"], plots_dir)
         draw_page_trend(data["page_trend"], data["cd_input"], plots_dir)
 
     if not args.skip_confidence:
@@ -435,10 +399,6 @@ def run_results_mode(args: argparse.Namespace) -> None:
     if not args.skip_stats_tables:
         write_all_stats_tables(stats_dir, data, tables_dir)
 
-
-def main() -> None:
-    args = parse_args()
-    run_results_mode(args)
     print("\nDone.")
 
 

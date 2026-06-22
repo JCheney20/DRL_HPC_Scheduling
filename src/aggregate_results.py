@@ -70,11 +70,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------------
-# Eval artifact discovery
-# ---------------------------------------------------------------------------
-
-
 def discover_eval_artifacts(
     manifest_df: pd.DataFrame,
     eval_root: Path,
@@ -91,26 +86,9 @@ def discover_eval_artifacts(
         eval_paths[run_id] = path
     return eval_paths
 
-
-# ---------------------------------------------------------------------------
-# Metadata attachment
-# ---------------------------------------------------------------------------
-
-
-def attach_manifest_metadata(
-    eval_df: pd.DataFrame, manifest_row: pd.Series
-) -> pd.DataFrame:
-    return eval_df.assign(**{col: manifest_row[col] for col in CANON_KEYS})
-
-
 # ---------------------------------------------------------------------------
 # Wide table construction
 # ---------------------------------------------------------------------------
-
-
-def build_eval_wide(eval_frames: list[pd.DataFrame]) -> pd.DataFrame:
-    return pd.concat(eval_frames, ignore_index=True)
-
 
 def check_key_uniqueness(df: pd.DataFrame, key_cols: list[str], context: str) -> None:
     duplicates = df[df.duplicated(subset=key_cols, keep=False)]
@@ -221,7 +199,7 @@ def main() -> None:
             validate_required_columns(df, required_cols, context=f"eval[{run_id}]")
             validate_finite_numeric(df, CORE_METRICS, context=f"eval[{run_id}]")
             manifest_row = manifest_df[manifest_df["run_id"] == run_id].iloc[0]
-            df = attach_manifest_metadata(df, manifest_row)
+            df = df.assign(**{col: manifest_row[col] for col in CANON_KEYS})
             eval_frames.append(df)
         except Exception as e:
             failures.append(f"{run_id}: {e}")
@@ -235,7 +213,7 @@ def main() -> None:
         print("No valid eval frames to aggregate. Exiting.")
         sys.exit(1)
 
-    eval_wide = build_eval_wide(eval_frames)
+    eval_wide = pd.concat(eval_frames, ignore_index=True)
     validate_finite_numeric(eval_wide, CORE_METRICS, context="eval_wide")
     check_key_uniqueness(eval_wide, key_cols=["run_id"], context="eval_wide")
 

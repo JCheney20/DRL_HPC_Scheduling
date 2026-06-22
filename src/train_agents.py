@@ -27,8 +27,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from torch import nn, manual_seed
+from stable_baselines3.common.utils import set_random_seed
+from torch import nn
 
+from checkpoint import SelectorCheckpointCallback
 from HPCsim.HPCsim import HPCsim
 from utils import (
     ALGORITHMS,
@@ -60,7 +62,6 @@ ACTIVATION_MAP: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
 
 def parse_args() -> argparse.Namespace:
     parser = ArgumentParserWithDefaults(description="Agent Scheduler training.")
@@ -199,8 +200,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    if args.split_id is not None and "." in args.split_id: 
-        args.split_id = Path(args.split_id).stem    
+    args.split_id = Path(args.split_id).stem if "." in args.split_id else args.split_id
     print(args)
     return args
 
@@ -218,14 +218,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("Hidden layer sizes must be positive")
     if args.save_interval * args.total_saving <= 0:
         raise ValueError("Total training steps must be positive")
-
-
-def setup_seeds(seed: int | None) -> None:
-    if seed is not None:
-        r.seed(seed)
-        np.random.seed(seed)
-        manual_seed(seed)
-
 
 def build_training_env(
     topology_file: str,
@@ -307,34 +299,26 @@ def train_and_log(
     selector_dir.mkdir(parents=True, exist_ok=True)
 
     total_timesteps = save_interval * total_saving
-    t_start = time.perf_counter()
-    episodes_completed: int | None = None
 
-    if "mask" in algorithm.lower():
-        for i in range(1, total_saving + 1):
-            model.learn(
-                reset_num_timesteps=False,
-                total_timesteps=save_interval,
-                tb_log_name=f"{name}",
-                use_masking=use_masking,
-            )
-            model.save(str(selector_dir / f"{save_interval * i}"))
-    else:
+    if "mask" not in algorithm.lower():
         use_masking = False
-        for i in range(1, total_saving + 1):
-            model.learn(
-                reset_num_timesteps=False,
-                total_timesteps=save_interval,
-                tb_log_name=f"{name}",
-            )
-            model.save(str(selector_dir / f"{save_interval * i}"))
 
+    learn_kwargs: dict[str, Any] = {
+        "total_timesteps": total_timesteps,
+        "tb_log_name": name,
+        "callback": SelectorCheckpointCallback(
+            save_freq=save_interval,
+            save_path=str(selector_dir),
+        ),
+    }
+    if "mask" in algorithm.lower():
+        learn_kwargs["use_masking"] = use_masking
+
+    t_start = time.perf_counter()
+    model.learn(**learn_kwargs)
     wall_clock_s = time.perf_counter() - t_start
-    if hasattr(model, "_episode_num"):
-        try:
-            episodes_completed = int(getattr(model, "_episode_num"))
-        except Exception:
-            episodes_completed = None
+
+    episodes_completed = int(model._episode_num)
 
     model_path = str(selector_dir / f"{total_timesteps}.zip")
 
@@ -387,7 +371,8 @@ def main() -> None:
         print(f"[ERROR] Argument validation failed: {e}")
         sys.exit(1)
 
-    setup_seeds(args.seed)
+    if args.seed is not None:
+        set_random_seed(args.seed, using_cuda=True)
 
     try:
         split_metadata = load_split_metadata(split_id=args.split_id)
@@ -454,7 +439,6 @@ def main() -> None:
     )
 
     print("[DONE]")
-
 
 if __name__ == "__main__":
     main()

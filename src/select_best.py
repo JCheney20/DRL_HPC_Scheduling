@@ -29,7 +29,7 @@ import networkx as nx
 import pandas as pd
 from paretoset import paretoset
 
-from src.utils import METRIC_DIRECTION, write_json
+from utils import METRIC_DIRECTION, write_json
 
 PRIMARY_METRICS = ["avg_waiting", "avg_slowdown"]
 SECONDARY_METRICS = ["max_waiting", "max_slowdown", "avg_turnaround", "cpu_utilization"]
@@ -58,12 +58,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, default=ALPHA)
     return parser.parse_args()
 
+
 def find_pareto_front(df: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
     sense = ["min" if METRIC_DIRECTION.get(m, "lower_is_better") == "lower_is_better" else "max"
              for m in metrics]
     mask = paretoset(df[metrics], sense=sense)
     return df.loc[mask].reset_index(drop=True)
-
 
 def build_indistinguishable_edges(nemenyi_df: pd.DataFrame, metric: str, alpha: float) -> set[tuple[str, str]]:
     """Edges = pairs NOT significantly different (p_value >= alpha) on `metric`."""
@@ -77,11 +77,9 @@ def filter_statistical_pareto(
 ) -> tuple[list[list[str]], dict]:
     treatments = pareto_df["treatment_id"].astype(str).tolist()
 
-    # Edge intersection across all primaries: only "tied" if indistinguishable on EVERY primary metric.
     per_metric_edges = [build_indistinguishable_edges(nemenyi_df, m, alpha) for m in primary_metrics]
-    intersection = set.intersection(*per_metric_edges) if per_metric_edges else set()
 
-    # Restrict to pairs that are both on the Pareto front.
+    intersection = set.intersection(*per_metric_edges) if per_metric_edges else set()
     intersection = {(a, b) for a, b in intersection if a in treatments and b in treatments}
 
     graph = nx.Graph()
@@ -96,21 +94,21 @@ def filter_statistical_pareto(
     }
     return classes, rationale
 
-
-
-
 def ci_lookup(ci_df: pd.DataFrame, metric: str, a: str, b: str) -> dict | None:
-    """Return the Wilcoxon CI for (a - b) on `metric`, regardless of row ordering in the CSV."""
     if ci_df is None or ci_df.empty:
         return None
     subset = ci_df[ci_df["metric_name"] == metric]
     row = subset[(subset["treatment_a"] == a) & (subset["treatment_b"] == b)]
     if not row.empty:
         r = row.iloc[0]
+        if pd.isna(r["ci_low"]) or pd.isna(r["ci_high"]):
+            return None
         return {"ci_low": float(r["ci_low"]), "ci_high": float(r["ci_high"])}
     row = subset[(subset["treatment_a"] == b) & (subset["treatment_b"] == a)]
     if not row.empty:
         r = row.iloc[0]
+        if pd.isna(r["ci_low"]) or pd.isna(r["ci_high"]):
+            return None
         return {"ci_low": -float(r["ci_high"]), "ci_high": -float(r["ci_low"])}
     return None
 
@@ -128,7 +126,9 @@ def is_significantly_better(ci_df: pd.DataFrame, metric: str, a: str, b: str, di
     return ci["ci_low"] > 0      # a - b entirely positive => a is higher => better
 
 
-def break_ties_with_cis(candidates: list[str], seed_summary: pd.DataFrame, ci_df: pd.DataFrame, tie_breakers: list[str]) -> tuple[str, dict]:
+def break_ties_with_cis(
+    candidates: list[str], seed_summary: pd.DataFrame, ci_df: pd.DataFrame, tie_breakers: list[str]
+) -> tuple[str, dict]:
     rationale = {"initial_candidates": candidates.copy(), "steps": []}
     means = seed_summary.groupby("treatment_id").mean(numeric_only=True)
     current = candidates.copy()
@@ -145,6 +145,9 @@ def break_ties_with_cis(candidates: list[str], seed_summary: pd.DataFrame, ci_df
         best_val = cand_means.min() if direction == "lower_is_better" else cand_means.max()
         leaders = cand_means[cand_means == best_val].index.tolist()
 
+        # A leader "wins" this metric outright if it's significantly better than
+        # every other current candidate (per CI). Check every leader, in case of
+        # an exact mean tie among more than one.
         winner = None
         evidence = []
         for leader in leaders:
@@ -179,6 +182,11 @@ def break_ties_with_cis(candidates: list[str], seed_summary: pd.DataFrame, ci_df
     fallback = sorted(current)[0]
     rationale["final_fallback"] = {"chosen": fallback, "remaining": current}
     return fallback, rationale
+
+
+# ---------------------------------------------------------------------------
+# Page trend (validity check only — not used for selection)
+# ---------------------------------------------------------------------------
 
 
 def load_page_trend(page_trend_path: Path) -> dict | None:
@@ -216,12 +224,11 @@ def main() -> None:
         print(f"[ERROR] seed_summary missing primary metric columns: {missing}", file=sys.stderr)
         sys.exit(1)
 
-    # One groupby, reused for both Pareto means and tie-break means.
     grouped_means = seed_summary.groupby("treatment_id").mean(numeric_only=True)
     algo_means = grouped_means[PRIMARY_METRICS].reset_index()
 
-    pareto_df = find_pareto_front(algo_means, PRIMARY_METRICS)             
-    classes, stats_rationale = filter_statistical_pareto(                   
+    pareto_df = find_pareto_front(algo_means, PRIMARY_METRICS)              # [1]
+    classes, stats_rationale = filter_statistical_pareto(                   # [2]
         pareto_df, nemenyi, PRIMARY_METRICS, alpha
     )
     final_candidates = sorted({t for cls in classes for t in cls})
@@ -242,7 +249,7 @@ def main() -> None:
     if len(final_candidates) == 1:
         winner, rationale = final_candidates[0], {"method": "single_pareto_candidate"}
     else:
-        winner, tie_rationale = break_ties_with_cis(final_candidates, seed_summary, ci_df, TIE_BREAKERS)  
+        winner, tie_rationale = break_ties_with_cis(final_candidates, seed_summary, ci_df, TIE_BREAKERS)  # [3]
         rationale = {"method": "tie_breaker_with_cis", "details": tie_rationale}
 
     tie_metrics = {

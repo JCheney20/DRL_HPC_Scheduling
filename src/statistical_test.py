@@ -27,7 +27,11 @@ Pipeline per metric:
 References:
   - scipy.stats.friedmanchisquare: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.friedmanchisquare.html
   - scipy.stats.shapiro:           https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.shapiro.html
+  - scipy.stats.wilcoxon:          https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wilcoxon.html
+  - scipy.stats.page_trend_test:   https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.page_trend_test.html
   - scikit-posthocs nemenyi:       https://scikit-posthocs.readthedocs.io/en/latest/tutorial/scipy.stats.nemenyi.html
+  - Hollander & Wolfe (1999), Nonparametric Statistical Methods, 2nd ed., Sec 3.3
+    (classical Wilcoxon signed-rank CI procedure that Carrasco et al. 2020 builds on)
   - numpy random Generator:        https://numpy.org/doc/stable/reference/random/generator.html
   - pandas pivot_table:            https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.pivot_table.html
   - argparse:                      https://docs.python.org/3/library/argparse.html
@@ -39,6 +43,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +56,6 @@ from utils import (
     ALGORITHMS,
     TRAD_ALGORITHMS,
     SEED_SUMMARY_REQUIRED_IDS,
-    METRIC_DIRECTION,
     build_run_metadata,
     interpret_stat,
     load_seed_summary,
@@ -88,6 +92,18 @@ ALL_METRICS = [
 ]
 
 
+METRIC_DIRECTION: dict[str, str] = {
+    "avg_waiting": "lower_is_better",
+    "avg_slowdown": "lower_is_better",
+    "max_waiting": "lower_is_better",
+    "max_slowdown": "lower_is_better",
+    "avg_turnaround": "lower_is_better",
+    "cpu_utilization": "higher_is_better",
+    "gpu_utilization": "higher_is_better",
+    "episode_reward": "higher_is_better",
+    "decision_latency_mean_ms": "lower_is_better",
+    "eval_wall_s": "lower_is_better",
+}
 
 KENDALL_W_THRESHOLDS = [
     (0.0, "Slight Agreement"),
@@ -99,6 +115,8 @@ KENDALL_W_THRESHOLDS = [
 
 MIN_ALGORITHMS = 3
 MIN_BLOCKS = 2
+
+DECLARED_TREATMENT_ORDER: list[str] = list(ALGORITHMS.keys()) + TRAD_ALGORITHMS
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +204,6 @@ def check_data_sufficiency(
         "min_requirements_met": n_treatments >= min_algorithms
         and n_blocks_common >= min_blocks,
     }
-
-
-# ---------------------------------------------------------------------------
-# Repeated-measures matrix
-# ---------------------------------------------------------------------------
 
 
 def build_repeated_measures_matrix(
@@ -325,42 +338,91 @@ def run_nemenyi_posthoc(
     }
 
 
-# ---------------------------------------------------------------------------
-# Bootstrap median CIs
-# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=None)
+def _wilcoxon_signed_rank_cumulative_dist(n: int) -> tuple[float, ...]:
+    """
+    Exact null CDF of W+ (sum of positive signed ranks) for n untied, nonzero
+    observations, via DP: counts[k] after rank r = counts[k] (rank r negative)
+    + counts[k-r] (rank r positive). Depends only on n, cached accordingly.
+    """
+    max_w = n * (n + 1) // 2
+    dist = np.zeros(max_w + 1)
+    dist[0] = 1.0
+    for r in range(1, n + 1):
+        new_dist = dist.copy()
+        new_dist[r:] += dist[:-r]
+        dist = new_dist
+    cumulative = np.cumsum(dist / (2 ** n))
+    return tuple(cumulative)
+
+
+def _exact_critical_value(n: int, alpha_half: float) -> int:
+    """Largest integer c such that P(W+ <= c) <= alpha_half under the exact null distribution."""
+    cumulative = _wilcoxon_signed_rank_cumulative_dist(n)
+    c_alpha = -1
+    for w, p in enumerate(cumulative):
+        if p <= alpha_half:
+            c_alpha = w
+        else:
+            break
+    return c_alpha
 
 
 def Wilcoxon_np_ci(
     values_a: pd.Series, values_b: pd.Series, alpha: float
 ) -> dict[str, Any]:
     """
-    # Ref: https://numpy.org/doc/stable/reference/generated/numpy.subtract.outer.html
+    Non-parametric (Hodges-Lehmann / Walsh-average) confidence interval for
+    the median of paired differences. See module-level note above for the
+    bug this replaces and its empirical verification.
+
+    # Ref: Hollander & Wolfe (1999), Nonparametric Statistical Methods, Sec 3.3
+    # Ref: Carrasco et al. (2020) -- non-parametric CI procedure this extends
     # Ref: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.wilcoxon.html
-    # Ref: https://en.wikipedia.org/wiki/Wilcoxon_signed-rank_test
     """
     assert len(values_a) == len(values_b), "Paired inputs must be the same length"
     d = (values_a - values_b).to_numpy()
     l = len(d)
 
     i, j = np.tril_indices(l)
-
     walsh_sorted = np.sort((d[i] + d[j]) / 2)
     n_walsh = len(walsh_sorted)
+
+    alpha_half = alpha / 2
+
     if l <= 20:
-        result = stats.wilcoxon(d, method="exact")
-        W = result.statistic
-        K = int(W) + 1
+        c_alpha = _exact_critical_value(l, alpha_half)
+        K = c_alpha + 1
+        method = "exact"
+        achieved_alpha_half = (
+            float(_wilcoxon_signed_rank_cumulative_dist(l)[c_alpha]) if c_alpha >= 0 else None
+        )
     else:
-        result = stats.wilcoxon(d, method="asymptotic")
-        W, z = result.statistic, result.zstatistic
-        K = (n_walsh / 2) - z * math.sqrt(n_walsh * (2 * l + 1) / 6)
-        K = math.ceil(K)
+        z_crit = stats.norm.ppf(1 - alpha_half)  
+        K = math.ceil((l * (l + 1) / 4) - z_crit * math.sqrt(l * (l + 1) * (2 * l + 1) / 24))
+        method = "asymptotic"
+        achieved_alpha_half = alpha_half
+
+    if K < 1 or K > n_walsh:
+        return {
+            "ci_low": None,
+            "ci_high": None,
+            "alpha": alpha,
+            "achieved_alpha": None,
+            "method": method,
+            "n_pairs": l,
+            "note": f"No valid critical value for n={l} at alpha={alpha}; CI not achievable at this sample size.",
+        }
 
     return {
         "ci_low": float(walsh_sorted[K - 1]),
         "ci_high": float(walsh_sorted[n_walsh - K]),
         "alpha": alpha,
-        "statistic": float(W),
+        "achieved_alpha": float(2 * achieved_alpha_half) if achieved_alpha_half is not None else None,
+        "method": method,
+        "n_pairs": l,
     }
 
 
@@ -388,25 +450,60 @@ def compute_confidence_curves(
     return pd.DataFrame(rows)
 
 
-def run_page_trend_test(matrix_df: pd.DataFrame, alpha: float) -> dict[str, Any]:
-    treatment_order = [
-        col
-        for col in matrix_df.columns
-        if col.split("__mask_")[0] in (list(ALGORITHMS.keys()) + TRAD_ALGORITHMS)
-    ]
-    if len(treatment_order) < 3:
+# ---------------------------------------------------------------------------
+# Page trend test
+# ---------------------------------------------------------------------------
+#
+
+
+def run_page_trend_test(
+    matrix_df: pd.DataFrame,
+    declared_order: list[str],
+    alpha: float,
+    trend_direction: str,
+) -> dict[str, Any]:
+    """
+    :param trend_direction: derived from METRIC_DIRECTION for this metric, not
+        a free choice -- see the call site in run_all_metrics(). Rule:
+        "higher_is_better" metrics -> "increasing" (last algorithm in
+        declared_order predicted to have the highest mean); "lower_is_better"
+        metrics -> "decreasing" (last algorithm predicted to have the lowest,
+        i.e. best, mean). This makes the predicted trend along
+        ALGORITHMS + TRAD_ALGORITHMS consistently mean "later in the sequence
+        is better," regardless of which way a given metric's raw values run.
+
+        scipy's page_trend_test defaults to "increasing" implicitly via
+        column order; this parameter makes the direction explicit via
+        predicted_ranks instead, since reversing column order would also
+        (confusingly) reverse the reported treatment_order.
+    """
+    order_index = {algo: i for i, algo in enumerate(declared_order)}
+
+    def _algo_prefix(treatment_id: str) -> str:
+        return treatment_id.split("__mask_")[0]
+
+    ordered_treatments = sorted(
+        (col for col in matrix_df.columns if _algo_prefix(col) in order_index),
+        key=lambda col: order_index[_algo_prefix(col)],
+    )
+    if len(ordered_treatments) < 3:
         return {
             "performed": False,
             "skipped_reason": "fewer than 3 ordered treatments present",
         }
-    ordered = matrix_df[treatment_order]
-    result = stats.page_trend_test(ordered.to_numpy())
+    ordered = matrix_df[ordered_treatments]
+    n = len(ordered_treatments)
+    predicted_ranks = (
+        list(range(1, n + 1)) if trend_direction == "increasing" else list(range(n, 0, -1))
+    )
+    result = stats.page_trend_test(ordered.to_numpy(), predicted_ranks=predicted_ranks)
     return {
         "performed": True,
         "statistic": float(result.statistic),
         "p_value": float(result.pvalue),
         "significant": bool(result.pvalue < alpha),
-        "treatment_order": treatment_order,
+        "treatment_order": ordered_treatments,
+        "trend_direction": trend_direction,
     }
 
 
@@ -508,6 +605,7 @@ def run_all_metrics(
     df: pd.DataFrame,
     metrics: list[str],
     alpha: float,
+    declared_order: list[str] = DECLARED_TREATMENT_ORDER,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     errors: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -701,7 +799,10 @@ def run_all_metrics(
 
         try:
             stage = "page_trend"
-            page_trend = run_page_trend_test(matrix_df, alpha)
+            trend_direction = (
+                "increasing" if METRIC_DIRECTION[metric] == "higher_is_better" else "decreasing"
+            )
+            page_trend = run_page_trend_test(matrix_df, declared_order, alpha, trend_direction)
 
         except Exception as e:
             status, skipped_reason = "error", f"{e}"
@@ -775,7 +876,7 @@ def build_stats_metadata(
             "split_ids": input_df["split_id"].unique().tolist(),
             "n_treatments": n_treatments_input,
             "n_blocks": n_blocks_input,
-            "treatment_order": list(ALGORITHMS.keys()) + TRAD_ALGORITHMS,
+            "treatment_order": DECLARED_TREATMENT_ORDER,
         },
     )
 
@@ -834,16 +935,6 @@ def write_stats_outputs(
     write_csv(
         pd.DataFrame(all_wilcoxon) if all_wilcoxon else pd.DataFrame([]),
         out_dir / "confidence_intervals.csv",
-    )
-
-    all_curves: list[dict[str, Any]] = []
-    for result in results:
-        curves = result.get("confidence_curves", {})
-        if curves.get("performed"):
-            all_curves.extend(curves.get("curves", []))
-    write_csv(
-        pd.DataFrame(all_curves) if all_curves else pd.DataFrame([]),
-        out_dir / "confidence_curves.csv",
     )
 
     all_ranks: list[dict[str, Any]] = []

@@ -69,18 +69,18 @@ def load_manifest_specs(manifest_path: Path) -> list[RunSpec]:
     for row in df.itertuples(index=False):
         specs.append(
             RunSpec(
-                run_id=row.run_id,  # type: ignore
-                treatment_id=row.treatment_id,  # type: ignore
-                algorithm=row.algorithm.strip().lower(),  # type: ignore
-                use_masking=bool(row.use_masking),  # type: ignore
-                window_size=int(row.window_size),  # type: ignore
-                tail_size=int(row.tail_size),  # type: ignore
-                seed=None if pd.isna(row.seed) else int(row.seed),  # type: ignore
-                split_id=row.split_id,  # type: ignore
-                model_path=row.model_path,  # type: ignore
-                trace_file=row.trace_file,  # type: ignore
-                topology_file=row.topology_file,  # type: ignore
-                node_file=row.node_file,  # type: ignore
+                run_id=row.run_id,  
+                treatment_id=row.treatment_id,  
+                algorithm=row.algorithm.strip().lower(),  
+                use_masking=bool(row.use_masking),  
+                window_size=int(row.window_size),  
+                tail_size=int(row.tail_size),  
+                seed=None if pd.isna(row.seed) else int(row.seed),  
+                split_id=row.split_id,  
+                model_path=row.model_path,  
+                trace_file=row.trace_file, 
+                topology_file=row.topology_file,  
+                node_file=row.node_file,  
             )
         )
     return specs
@@ -188,9 +188,7 @@ def evaluate_one_run(
         node_file=spec.node_file,
         episode_reward=episode_reward,
         decision_count=n_steps,
-        decision_latency_mean_ms=float(np.mean(decision_latencies) * 1000.0)
-        if decision_latencies
-        else 0.0,
+        decision_latency_mean_ms=float(np.mean(decision_latencies) * 1000.0) if decision_latencies else 0.0,
         eval_wall_s=eval_wall_s,
         max_waiting=float(max_w),
         avg_waiting=float(avg_w),
@@ -208,14 +206,11 @@ def evaluate_one_run(
 # ---------------------------------------------------------------------------
 
 
-def write_eval_outputs(
-    output_dir: Path, result: EvalResult, metadata: dict[str, Any]
-) -> None:
+def write_eval_outputs(output_dir: Path, result: EvalResult, metadata: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = result.run_id
-    write_dict_outputs(
-        result.__dict__, f"{run_id}_metrics", output_dir, as_json=True, as_csv=True
-    )
+    write_dict_outputs(result.__dict__, f"{run_id}_metrics", output_dir, 
+                       as_json=True, as_csv=True)
     write_json(metadata, output_dir / f"{run_id}_metadata.json")
 
 
