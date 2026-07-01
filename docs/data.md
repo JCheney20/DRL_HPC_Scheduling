@@ -4,10 +4,10 @@
 
 This project uses **real Slurm trace logs** from production HPC clusters to ensure realistic evaluation.
 
-**Note:** Raw trace files are **not included** in this repository due to:
-- File size (~100MB+)
-- Potential privacy/licensing constraints
-- Reproducibility via documented sourcing
+**What's in the repo:**
+- Trace CSVs **are committed**: `data/physical_job.csv`, `data/deeplearn_job.csv` (~42 MB total).
+- Topologies + node inventory: `data/topology/{physical_topology.txt,deeplearn_topology.txt,nodes.csv}`.
+- Train/holdout splits are **not** committed — they are regenerated deterministically by `make_split` (`data/splits/`, gitignored).
 
 ---
 
@@ -106,16 +106,6 @@ Alternative datasets with similar characteristics:
 2. **Grid Workloads Archive**  
    URL: [http://gwa.ewi.tudelft.nl/](http://gwa.ewi.tudelft.nl/)
 
-### Option 3: Generate Synthetic Traces
-
-Use the provided synthetic workload generator (future addition):
-```bash
-python data/generate_synthetic.py \
-  --type balanced \
-  --num_jobs 10000 \
-  --output data/traces/synthetic_balanced.csv
-```
-
 ---
 
 ## Data Statistics
@@ -145,21 +135,16 @@ python data/generate_synthetic.py \
 
 ## Data Validation
 
-Before training, validate dataset integrity:
+`make_split` is the integrity gate: it reads a trace, stable-sorts by `Submit`,
+splits 70/30, and writes a metadata JSON (`data/splits/logs/<trace>_r70.json`)
+recording source, row counts, ratio, and split id. Run it first:
 
 ```bash
-python data/validate_traces.py \
-  --trace data/traces/physical_job.csv \
-  --topology data/topologies/physical_topology.txt
+python -m src.make_split --src physical_job --ratio 0.7 --out-dir data/splits/
 ```
 
-Expected output:
-```
-✅ Schema validation passed
-✅ No missing values
-✅ Temporal ordering verified
-✅ Resource constraints valid
-```
+Training additionally rejects any trace path containing `holdout`
+(case-insensitive), so the final holdout can never be used for tuning.
 
 ---
 

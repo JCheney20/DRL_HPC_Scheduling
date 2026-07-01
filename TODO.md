@@ -7,49 +7,56 @@ alignment checklist for Submission 2. Use the tags below to track status.
 Status tags (prepend to tasks): [PENDING] [IN-PROGRESS] [DONE] [BLOCKED]
 Priority tags: [MUST] [SHOULD] [NICE]
 
+NOTE (re-triaged after the src/ restructure): all workflow scripts now live under
+`src/` and run as `python -m src.<name>`; SLURM runner settings live in
+`profiles/slurm/config.yaml` (not config.yaml). The `file:line` references in the
+detailed sections below predate the restructure and are approximate. All Phase 0–7
+MUST items are now complete (holdout evaluation added via holdout_eval /
+holdout_aggregate); remaining open items are SHOULD/NICE polish enhancements.
+
 --------------------------------------------------------------------------------
 Phase Plan
 --------------------------------------------------------------------------------
 
 Phase 0 — Define selection + reporting contract (unblocker)
-[☑ ] [MUST] [PENDING] Document Pareto selection policy (primaries + secondaries) and tie-breakers.
-[ ] [MUST] [PENDING] Fix output contracts for plots (PNG) and tables (CSV) used by Typst.
+[x] [MUST] [DONE] Document Pareto selection policy (primaries + secondaries) and tie-breakers. (config.yaml pareto_metrics/pareto_tiebreakers; src/select_best.py)
+[x] [MUST] [DONE] Fix output contracts for plots (PNG) and tables (CSV) used by Typst. (src/visualise.py)
 
 Phase 1 — Core pipeline alignment (schemas + safety)
-[☑] [MUST] [DONE] Implement manifest locking to avoid race conditions on cluster runs.
-[☑] [MUST] [DONE] Standardize treatment_id format: "{algorithm}__mask_{use_masking}" (producer: train/eval manifest; consumers: aggregate/stats).
-[☑] [MUST] [DONE] Align train/eval window_size + tail_size to ensure reproducibility (persist in manifest; eval reads manifest, not CLI defaults).
-[☑] [MUST] [DONE] Ensure split_id token usage (no .json) across CLI + Snakemake (producer: CLI parsing; consumers: Snakemake rules + downstream manifest filters).
+[x] [MUST] [DONE] Implement manifest locking to avoid race conditions on cluster runs.
+[x] [MUST] [DONE] Standardize treatment_id format: "{algorithm}__mask_{use_masking}" (producer: train/eval manifest; consumers: aggregate/stats).
+[x] [MUST] [DONE] Align train/eval window_size + tail_size to ensure reproducibility (persist in manifest; eval reads manifest, not CLI defaults).
+[x] [MUST] [DONE] Ensure split_id token usage (no .json) across CLI + Snakemake (producer: CLI parsing; consumers: Snakemake rules + downstream manifest filters).
 
 Phase 2 — Stats pipeline (Carrasco-aligned + fail-fast)
-[☑] [MUST] [DONE] Implement Wilcoxon non-parametric CI (exact K for l <= 20, approx K for l > 20).
-[☑] [MUST] [DONE] Implement confidence curves (delta vs p-value) and export CSV.
-[☑] [MUST] [DONE] Implement Page trend test with ordering = ALGORITHMS + TRAD_ALGORITHMS.
-[☑] [MUST] [DONE] Add fail-fast option and deterministic outputs for stats.
+[x] [MUST] [DONE] Implement Wilcoxon non-parametric CI (exact K for l <= 20, approx K for l > 20).
+[x] [MUST] [DONE] Implement confidence curves (delta vs p-value) and export CSV.
+[x] [MUST] [DONE] Implement Page trend test with ordering = ALGORITHMS + TRAD_ALGORITHMS.
+[x] [MUST] [DONE] Add fail-fast option and deterministic outputs for stats.
 
 Phase 3 — Baselines (separate stats, combined visuals)
-[ ] [SHOULD] [PENDING] Emit baseline outputs in eval_wide-compatible schema.
-[ ] [SHOULD] [PENDING] Aggregate baseline results into baseline_* summaries.
-[ ] [SHOULD] [PENDING] Keep baseline stats separate but allow combined visual comparison.
+[x] [SHOULD] [DONE] Emit baseline outputs in eval_wide-compatible schema. (src/run_baseline.py, src/baseline_aggregate.py)
+[x] [SHOULD] [DONE] Aggregate baseline results into baseline_* summaries. (baseline_summary.csv, baseline_eval_wide.csv)
+[x] [SHOULD] [DONE] Keep baseline stats separate but allow combined visual comparison. (src/baseline_compare.py -> baseline_comparison.csv)
 
 Phase 4 — Best algorithm selection + holdout evaluation
-[ ] [MUST] [PENDING] Implement Pareto selector and tie-breakers; write best_algorithm.json.
-[ ] [MUST] [PENDING] Evaluate best algorithm on holdout across all seeds.
-[ ] [MUST] [PENDING] Aggregate holdout results into holdout_summary.csv.
+[x] [MUST] [DONE] Implement Pareto selector and tie-breakers; write best_algorithm.json. (src/select_best.py)
+[x] [MUST] [DONE] Evaluate best algorithm on holdout across all seeds. (rule holdout_eval; evaluate_agents --eval-trace/--filter-treatment)
+[x] [MUST] [DONE] Aggregate holdout results into holdout_summary.csv. (rule holdout_aggregate -> result/<trace>/holdout/holdout_summary.csv)
 
 Phase 5 — Visualization + Typst-ready outputs
-[ ] [MUST] [PENDING] Create visualization runner to generate PNG plots + CSV tables.
-[ ] [MUST] [PENDING] Include Pareto plot, CD diagram, confidence curves, and DRL vs baseline plots.
-[ ] [MUST] [PENDING] Ensure all outputs are deterministic and stored under result/{trace}/.
+[x] [MUST] [DONE] Create visualization runner to generate PNG plots + CSV tables. (src/visualise.py, wired as `rule visualise`)
+[x] [MUST] [DONE] Include Pareto plot, CD diagram, confidence curves, and DRL vs baseline plots.
+[x] [MUST] [DONE] Ensure all outputs are deterministic and stored under result/{trace}/ (plots under plots/).
 
 Phase 6 — Snakemake orchestration
-[ ] [MUST] [PENDING] Add baseline lane (baseline_only) and best/holdout stages.
-[ ] [MUST] [PENDING] Wire visualization stage and update rule all inputs.
-[ ] [MUST] [PENDING] Ensure config.yaml is the only user change needed to run.
+[x] [MUST] [DONE] Add baseline lane (baseline_only) and best/holdout stages. (baseline lane, select_best, holdout_eval/holdout_aggregate all wired)
+[x] [MUST] [DONE] Wire visualization stage and update rule all inputs. (rule all -> .visualise_complete)
+[x] [MUST] [DONE] Ensure config.yaml is the only user change needed to run. (runner settings isolated to profiles/slurm/)
 
 Phase 7 — Slurm + Apptainer
-[ ] [SHOULD] [PENDING] Add Slurm profile and validate submission.
-[ ] [SHOULD] [PENDING] Export Nix environment to Apptainer image and document usage.
+[x] [SHOULD] [DONE] Add Slurm profile and validate submission. (profiles/slurm/config.yaml; smoke-validated via `just run_smoke_slurm`)
+[x] [SHOULD] [DONE] Export Nix environment to Apptainer image and document usage. (`just build_sif` -> DRL_env.sif; docs/workflow_hpc.md)
 
 --------------------------------------------------------------------------------
 File-by-File Implementation Checklist
@@ -106,23 +113,23 @@ visualise_results.py (new)
 [ ] [MUST] [PENDING] Emit CSV tables for Typst inclusion. (visualise_results.py:TBD)
 [ ] [MUST] [PENDING] Keep outputs deterministic and under result/{trace}/plots and /tables. (visualise_results.py:TBD)
 
-Snakefile
-[ ] [MUST] [PENDING] Fix eval_seed inputs (manifest + filter_seed) and result path duplication. (Snakefile:199)
-[ ] [MUST] [PENDING] Align outputs with stats files (pairwise_nemenyi, page_trend, eval_wide). (Snakefile:272)
-[ ] [MUST] [PENDING] Add baseline-only lane and best/holdout stages. (Snakefile:311)
-[ ] [MUST] [PENDING] Add visualization stage and include outputs in rule all. (Snakefile:103)
-[ ] [MUST] [PENDING] Ensure all toggles are driven by config.yaml. (Snakefile:41)
-[ ] [MUST] [PENDING] Keep baselines included in stats by default; only skip tests on precondition failure. (Snakefile:311)
+Snakefile  (re-triaged post-restructure; end-to-end runtime confirmed by the pending smoke test)
+[x] [MUST] [DONE] Fix eval_run inputs (manifest + --filter-seed/--filter-algo). 
+[x] [MUST] [DONE] Align outputs with stats files (pairwise_nemenyi, page_trend, eval_wide).
+[x] [MUST] [DONE] Baseline-only lane + best stage + holdout stage (holdout_eval/holdout_aggregate) all wired.
+[x] [MUST] [DONE] Visualisation stage included in rule all (.visualise_complete).
+[x] [MUST] [DONE] Runner toggles driven by config.yaml / profiles (config carries workflow params only).
+[x] [MUST] [DONE] Baselines reported descriptively (baseline_compare), separate from DRL hypothesis testing (design decision, see Paper Alignment).
 
 config.yaml
-[ ] [MUST] [PENDING] Add baseline_only, baseline_selectors, baseline_allocators. (config.yaml:40)
-[ ] [MUST] [PENDING] Add pareto_metrics, pareto_tiebreakers, pareto_direction. (config.yaml:35)
-[ ] [MUST] [PENDING] Add visualization toggles and best_algo_policy. (config.yaml:40)
-[ ] [MUST] [PENDING] Ensure eval_deterministic and eval_max_steps are used in Snakefile. (config.yaml:40)
+[x] [MUST] [DONE] Add baseline_only, trad_algorithms, allocators. (config.yaml)
+[x] [MUST] [DONE] Add pareto_metrics, pareto_tiebreakers (direction handled by METRIC_DIRECTION in code). (config.yaml)
+[x] [MUST] [DONE] Add visualisation toggle block. (config.yaml visualisation:)
+[x] [MUST] [DONE] Ensure eval_deterministic and eval_max_steps are used in Snakefile. (EVAL_MAX_STEPS_FLAG, deterministic flag)
 
 Project_Github docs (workflow_hpc.md, workflow_local.md)
-[ ] [SHOULD] [PENDING] Document Slurm profile usage and Apptainer execution.
-[ ] [SHOULD] [PENDING] Document how to run baseline-only and holdout evaluation paths.
+[x] [SHOULD] [DONE] Document Slurm profile usage and Apptainer execution. (docs/workflow_hpc.md)
+[x] [SHOULD] [DONE] Document how to run baseline-only and holdout evaluation paths. (holdout stage documented in snakemake_pipeline.md + workflow_hpc.md + methodology_protocol.md)
 
 
 --------------------------------------------------------------------------------
@@ -146,12 +153,12 @@ cover the point or if a clarification is needed.
 Phase 0 — Configuration & Schema (Unblockers)
 --------------------------------------------------------------------------------
 
-config.yaml
-[ ] [MUST] [PENDING] Add `pareto_metrics` key (list, default: ["avg_waiting", "avg_slowdown", "cpu_utilization"]). (config.yaml:26)
-[ ] [MUST] [PENDING] Add `pareto_tiebreakers` key (list, default: ["avg_waiting", "avg_slowdown", "cpu_utilization"]). (config.yaml:26)
-[ ] [MUST] [PENDING] Add `visualization` toggle block (e.g., `plots_enabled`, `tables_enabled`). (config.yaml:26)
-[ ] [MUST] [PENDING] Add `baseline_selectors` and `baseline_allocators` to allow config-driven baseline execution. (config.yaml:41)
-[ ] [MUST] [PENDING] Ensure `baseline_only` logic is respected by the Snakefile entry point `rule all`. (config.yaml:50)
+config.yaml (duplicate of the Phase 0 config block above — same items)
+[x] [MUST] [DONE] Add `pareto_metrics` key.
+[x] [MUST] [DONE] Add `pareto_tiebreakers` key.
+[x] [MUST] [DONE] Add `visualisation` toggle block (`plots_enabled`, `tables_enabled`, ...).
+[x] [MUST] [DONE] Config-driven baseline execution via `trad_algorithms` + `allocators`.
+[x] [MUST] [DONE] `baseline_only` respected by `rule all` (BASELINE_ONLY branch).
 
 --------------------------------------------------------------------------------
 Phase 1 — Orchestration (Snakefile)

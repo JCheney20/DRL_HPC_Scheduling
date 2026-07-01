@@ -3,7 +3,7 @@
 # =============================================================================
 # Usage: just <target>
 # Example: just run_smoke
-# Example: just run_full TRACE=deep_learn
+# Example: just run_full TRACE=deeplearn_job
 # Ref: https://just.systems/man/en/
 # =============================================================================
 
@@ -16,8 +16,12 @@ cpu_count := if os() == "linux" {
     "4"
 }
 
-# Trace name override (just run_full TRACE=deep_learn)
+# Trace name override (just run_full TRACE=deeplearn_job)
 TRACE := env_var_or_default("TRACE", "physical_job")
+
+# Where `archive_results` copies analysis outputs + winning models off scratch
+# into safe (home) storage. Override: just archive_results ARCHIVE=/path
+ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
 
 # =============================================================================
 # HELP
@@ -45,6 +49,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
     echo "  run_smoke_slurm      - Submit smoke test to SLURM"
     echo "  run_full_slurm       - Submit full pipeline to SLURM"
     echo "  run_full_with_base_slurm - Submit full pipeline + baseline to SLURM"
+    echo "  archive_results      - Copy results + winning models off scratch to \$HOME/drl_archive"
     echo "  slurm_report         - Generate efficiency report after run"
     echo "  build_sif            - Build Apptainer .sif from Nix flake"
     echo ""
@@ -56,7 +61,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
     echo "EXAMPLES:"
     echo "  just run_smoke                         # Quick smoke test on physical_job"
     echo "  just run_full                          # Full run on physical_job"
-    echo "  just run_full TRACE=deep_learn         # Full run on deep_learn"
+    echo "  just run_full TRACE=deeplearn_job      # Full run on deeplearn_job"
     echo "  just export_dag                        # Export DAGs before running"
     echo "  just dry_run_smoke                     # Check DAG resolves correctly"
     echo ""
@@ -151,6 +156,12 @@ TRACE := env_var_or_default("TRACE", "physical_job")
         result/{{TRACE}}/baseline/baseline_metadata.json \
         --profile profiles/slurm
     echo "✓ Submitted. Check squeue for status."
+
+# Copy analysis outputs (and the winning algo's final models) off scratch into
+# safe home storage. Idempotent — run it after eval to snapshot the
+# aggregation/stats inputs early, and again at the end to grab stats + models.
+@archive_results:
+    ./src/archive_results.sh "{{TRACE}}" "{{ARCHIVE}}"
 
 @slurm_report:
     echo "Generating SLURM efficiency report..."

@@ -167,6 +167,7 @@ else:
             f"result/{TRACE_NAME}/stats/stats_summary.json",
             f"result/{TRACE_NAME}/.visualise_complete",
             f"result/{TRACE_NAME}/baseline/baseline_comparison.csv",
+            f"result/{TRACE_NAME}/holdout/holdout_summary.csv",
 
 # =============================================================================
 # RULE make_split
@@ -386,6 +387,79 @@ rule select_best:
             --output-dir result/{params.trace}/best \
             --alpha {params.alpha} \
             >> {log} 2>&1
+        """
+
+# =============================================================================
+# RULE holdout_eval — evaluate the winning algorithm on the reserved holdout
+# split (the one time the holdout is used; the winner is read from
+# best_algorithm.json at runtime and its models come from the run manifest).
+# =============================================================================
+
+rule holdout_eval:
+    input:
+        best_algo_json=f"result/{TRACE_NAME}/best/best_algorithm.json",
+        holdout=HOLDOUT_SPLIT,
+    output:
+        marker=touch(f"result/{TRACE_NAME}/holdout/.holdout_eval_complete"),
+    log:
+        f"logs/snakemake/{TRACE_NAME}/holdout_eval.log",
+    resources:
+        mem_mb=8000,
+        runtime=240,
+        slurm_partition="main",
+    params:
+        manifest="logs/run_log.csv",
+        holdout_root=f"result/{TRACE_NAME}/holdout",
+        holdout_trace=HOLDOUT_SPLIT,
+        max_steps_flag=EVAL_MAX_STEPS_FLAG,
+        deterministic_flag="--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic",
+    shell:
+        """
+        set -e
+        export GIT_COMMIT="{GIT_COMMIT}"
+        mkdir -p {params.holdout_root}/runs
+        WINNER=$(python -c "import json; print(json.load(open('{input.best_algo_json}'))['treatment_id'])")
+        echo "Holdout eval: winner=$WINNER on {params.holdout_trace}"
+        python -m src.evaluate_agents \
+            --manifest {params.manifest} \
+            --output-dir {params.holdout_root} \
+            --filter-treatment "$WINNER" \
+            --eval-trace {params.holdout_trace} \
+            {params.deterministic_flag} \
+            {params.max_steps_flag} \
+            >> {log} 2>&1
+        """
+
+# =============================================================================
+# RULE holdout_aggregate — summarise the winner's holdout runs across seeds
+# (reuses aggregate_results; strict=off skips the non-winner manifest rows).
+# =============================================================================
+
+rule holdout_aggregate:
+    input:
+        marker=f"result/{TRACE_NAME}/holdout/.holdout_eval_complete",
+    output:
+        holdout_summary=f"result/{TRACE_NAME}/holdout/holdout_summary.csv",
+    log:
+        f"logs/snakemake/{TRACE_NAME}/holdout_aggregate.log",
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="main",
+    params:
+        manifest="logs/run_log.csv",
+        eval_root=f"result/{TRACE_NAME}/holdout/runs",
+        output_dir=f"result/{TRACE_NAME}/holdout",
+    shell:
+        """
+        set -e
+        export GIT_COMMIT="{GIT_COMMIT}"
+        python -m src.aggregate_results \
+            --manifest {params.manifest} \
+            --eval-root {params.eval_root} \
+            --output-dir {params.output_dir} \
+            >> {log} 2>&1
+        cp {params.output_dir}/algorithm_summary.csv {output.holdout_summary}
         """
 
 # =============================================================================

@@ -1,136 +1,97 @@
-# Local Workflow Runbook (Template)
+# Local Workflow Runbook
 
-This file documents the local execution workflow from smoke checks to analysis.
+Validate the full pipeline locally before HPC deployment: catch schema and
+integration failures early with a fast, tiny end-to-end run. All scripts run as
+modules (`python -m src.<name>`); the normal path is the `just` targets, which
+wrap Snakemake.
 
-## 1. Purpose
+## 1. Prerequisites
 
-- validate the full pipeline locally before HPC deployment;
-- catch schema and integration failures early;
-- produce reproducible smoke artefacts for Submission 2.
+- Nix dev shell active (`nix develop`) or `requirements.txt` installed.
+- Traces present: `data/physical_job.csv`, `data/deeplearn_job.csv` (committed).
+- Topologies present: `data/topology/{physical_topology.txt,deeplearn_topology.txt,nodes.csv}`.
 
-## 2. Prerequisites
+Splits are **not** committed — `make_split` regenerates them on first run.
 
-- Nix environment available
-- Required scripts present
-- Data split prepared (`*_dev70.tsv`, `*_holdout30.tsv`)
-
-## 3. Environment Setup
+## 2. Fast path (recommended)
 
 ```bash
-cd Project_Github
 nix develop
+just dry_run_smoke     # validate the smoke DAG (no execution)
+just run_smoke         # tiny end-to-end run on physical_job
 ```
 
-## 4. Smoke Workflow
+`config.smoke.yaml` drives this: 2 seeds, 2 algorithms (`maskable_a2c`,
+`maskable_dqn`), 2 baselines (`fcfs`, `lcfs`), `save_interval=100 ×
+total_saving=2 = 200` steps, `window_size=16`, `n_envs=1`, `eval_max_steps=5`.
+The goal is to exercise every rule and file handoff, not to produce meaningful
+results. Outputs land in `result/physical_job/`.
 
-### Step 0: Generate Time-Aware Split
+Switch trace: `just run_smoke TRACE=deeplearn_job`.
+
+## 3. Manual stage-by-stage (for debugging a single rule)
+
+Run from the repo root. `make_split` first; everything else reads the manifest
+(`logs/run_log.csv`) written by training.
 
 ```bash
-python scripts/make_split.py --source physical_job --ratio 0.7 --out-dir data/splits/
+# 0. Time-aware split (idempotent)
+python -m src.make_split --src physical_job --ratio 0.7 --out-dir data/splits/
+
+# 1. Train one agent (tiny)
+python -m src.train_agents \
+  --algorithm maskable_a2c --name smoke_a2c --use-masking \
+  --trace data/splits/physical_job_dev70.tsv \
+  --save_interval 100 --total_saving 2 --seed 123456
+
+# 2. Evaluate (reads logs/run_log.csv)
+python -m src.evaluate_agents --manifest logs/run_log.csv \
+  --output-dir result/physical_job/eval_runs \
+  --filter-seed 123456 --filter-algo maskable_a2c --deterministic
+
+# 3. Aggregate → 4. Stats → 5. Select best
+python -m src.aggregate_results  ...
+python -m src.statistical_test   ...
+python -m src.select_best        ...
 ```
 
-Expected outputs:
+(Prefer `just run_smoke` — it wires the exact arguments for you.)
 
-- `data/splits/physical_job_dev70.tsv`
-- `data/splits/physical_job_holdout30.tsv`
-- `data/splits/logs/<split_id>.json`
+## 4. Holdout guard
 
-### Step 1: Guard Test (Holdout Rejection)
+Training refuses any trace path containing `holdout` (case-insensitive) and
+fails fast before environment setup, so the final holdout can never be used for
+tuning. To confirm the guard trips:
 
 ```bash
-python src/train_agents.py \
-  --algo maskable_dqn \
-  --name smoke_guard_should_fail \
-  --trace splits/physical_job_holdout30.tsv \
-  --save_interval 1000 \
-  --total_saving 1 \
-  --seed 123456
+python -m src.train_agents --algorithm maskable_dqn --name guard_check \
+  --trace data/splits/physical_job_holdout30.tsv \
+  --save_interval 100 --total_saving 1 --seed 123456
+# expected: immediate holdout-guard error, no training
 ```
 
-Expected behavior: fail-fast before environment setup with holdout guard error.
+## 5. Smoke gate checklist
 
-### Step 2: Smoke Train (Interim Maskable Gate, 1k steps)
+- [ ] split artefacts generated (`*_dev70.tsv`, `*_holdout30.tsv`) and metadata JSON logged
+- [ ] holdout guard fails fast on the holdout trace
+- [ ] smoke matrix completes without traceback
+- [ ] rewards finite; action masks valid for maskable algorithms
+- [ ] eval, aggregate, and stats stages produce their outputs
+- [ ] run metadata has a non-null `git_commit`
 
-```bash
-python src/train_agents.py \
-  --algo maskable_a2c \
-  --name smoke_a2c_mask_on \
-  --trace splits/physical_job_dev70.tsv \
-  --use-masking \
-  --save_interval 1000 \
-  --total_saving 1 \
-  --seed 123456
+## 6. Output layout
 
-python src/train_agents.py \
-  --algo maskable_dqn \
-  --name smoke_dqn_mask_on \
-  --trace splits/physical_job_dev70.tsv \
-  --use-masking \
-  --save_interval 1000 \
-  --total_saving 1 \
-  --seed 123456 \
-  --buffer-size 2000
-
-python src/train_agents.py \
-  --algo maskable_dqn \
-  --name smoke_dqn_mask_off \
-  --trace splits/physical_job_dev70.tsv \
-  --no-use-masking \
-  --save_interval 1000 \
-  --total_saving 1 \
-  --seed 123456 \
-  --buffer-size 2000
+```
+data/splits/          # regenerated splits (gitignored)
+trained_model/<trace>/<seed>/<algo>/selector/<step>.zip
+result/<trace>/eval_runs/ aggregate/ stats/ best/ baseline/
+logs/                 # run_log.csv, per-rule snakemake logs
+plots/                # figures (gitignored)
 ```
 
-### Step 3: Smoke Evaluate
+## 7. Common failure modes
 
-```bash
-python src/evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
-```
-
-### Step 4: Aggregate
-
-```bash
-python src/aggregate_results.py --input <metrics_dir> --output <summary_dir>
-```
-
-### Step 5: Stats Sanity
-
-```bash
-python src/statistical_test.py --input <summary_csv> --output <analysis_dir>
-```
-
-## 5. Smoke Gate Checklist
-
-- [ ] time-aware split artefacts generated and metadata logged
-- [ ] holdout guard test fails fast on holdout trace
-- [ ] interim maskable smoke matrix completes (A2C mask-on, DQN mask-on, DQN mask-off)
-- [ ] all 6 algorithms complete 1k-step smoke run (full gate)
-- [ ] rewards are finite
-- [ ] masks are valid for maskable algorithms
-- [ ] evaluation outputs are written
-- [ ] aggregation succeeds
-- [ ] statistics script runs without schema errors
-
-## 6. Expected Output Layout
-
-- `models/`
-- `logs/`
-- `result/drl/`
-- `analysis/`
-- `plots/`
-
-## 7. Common Failure Modes
-
-- holdout trace accidentally used for training (guard should block):
-- DQN replay OOM for dict observations (use smaller smoke `--buffer-size`):
-- mask shape mismatch:
-- missing metrics field:
-- unstable run naming:
-- split ID not propagated:
-
-## 8. Local Run Manifest
-
-| run_id | algorithm | seed | split_id | command | output_path | status |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+- `No module named 'src'` → invoked by path; use `python -m src.<name>`.
+- Holdout trace used for training → guard blocks it (by design).
+- DQN replay OOM on dict observations → reduce `--buffer-size` for smoke.
+- Missing split → run `make_split` first (or just use `just run_smoke`).

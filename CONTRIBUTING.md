@@ -78,17 +78,17 @@ Before submitting a pull request:
 
 1. **Run existing tests:**
     ```bash
-    pytest tests/
+    python -m pytest src/test_scheduler.py
     ```
 
-2. **Add tests for new features:**
-    ```bash
-    # Create test file: tests/test_your_feature.py
-    ```
+2. **Add tests for new features** alongside the code in `src/` (e.g. `src/test_your_feature.py`).
 
-3. **Smoke test your changes:**
+3. **Smoke test your changes** end-to-end:
     ```bash
-    python src/train_agents.py --algo maskable_ppo --save_interval 1000 --total_saving 1 --seed 123456 --trace data/splits/physical_job_dev70.tsv
+    just run_smoke
+    # or a single run:
+    python -m src.train_agents --algorithm maskable_ppo --name contrib_smoke \
+      --trace data/splits/physical_job_dev70.tsv --save_interval 100 --total_saving 2 --seed 123456
     ```
 
 ---

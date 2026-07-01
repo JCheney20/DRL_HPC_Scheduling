@@ -30,18 +30,18 @@ Use this template to record selector-only smoke evidence in a consistent, audit-
 
 | test | command | expected result | actual result | status |
 |---|---|---|---|---|
-| negative holdout guard | `python src/train_agents.py --algo maskable_dqn --trace splits/<name>_holdout30.tsv --save_interval 1000 --total_saving 1 --seed <seed>` | fail-fast before env setup with holdout error | | |
-| positive dev start | `python src/train_agents.py --algo maskable_dqn --trace splits/<name>_dev70.tsv --save_interval 1000 --total_saving 1 --seed <seed> --buffer-size <small>` | starts env setup/training normally | | |
+| negative holdout guard | `python -m src.train_agents --algorithm maskable_dqn --name guard_check --trace data/splits/<name>_holdout30.tsv --save_interval 100 --total_saving 1 --seed <seed>` | fail-fast before env setup with holdout error | | |
+| positive dev start | `python -m src.train_agents --algorithm maskable_dqn --name dev_check --trace data/splits/<name>_dev70.tsv --save_interval 100 --total_saving 2 --seed <seed> --buffer-size <small>` | starts env setup/training normally | | |
 
 ## 4. Smoke Matrix Evidence
 
-Use fixed seed and smoke controls (`--save_interval 1000 --total_saving 1`).
+Use fixed seed and smoke controls (`--save_interval 100 --total_saving 2`; final checkpoint at 200 steps). A manual `--name <run_id>` run writes to `trained_model/<run_id>/selector/<step>.zip`.
 
 | run_id | algorithm | masking | seed | command | expected checkpoint | observed checkpoint path | exit code | status |
 |---|---|---|---|---|---|---|---|---|
-| smoke_a2c_mask_on | maskable_a2c | true | | | `trained_model/smoke_a2c_mask_on/selector/1000.zip` | | | |
-| smoke_dqn_mask_on | maskable_dqn | true | | | `trained_model/smoke_dqn_mask_on/selector/1000.zip` | | | |
-| smoke_dqn_mask_off | maskable_dqn | false | | | `trained_model/smoke_dqn_mask_off/selector/1000.zip` | | | |
+| smoke_a2c_mask_on | maskable_a2c | true | | | `trained_model/smoke_a2c_mask_on/selector/200.zip` | | | |
+| smoke_dqn_mask_on | maskable_dqn | true | | | `trained_model/smoke_dqn_mask_on/selector/200.zip` | | | |
+| smoke_dqn_mask_off | maskable_dqn | false | | | `trained_model/smoke_dqn_mask_off/selector/200.zip` | | | |
 
 ## 5. Metrics/Quality Sanity
 

@@ -51,16 +51,18 @@ Use this file as the canonical methodology specification for Submission 2.
 
 ## 5. Training Protocol
 
-- Timesteps per run: smoke default `--save_interval 1000 --total_saving 1` (1k steps)
-- Seed set: fixed seed for smoke reproducibility (for example `123456`), multi-seed set for full comparison runs
-- Hyperparameter source:
-- Checkpoint cadence: every `save_interval` steps to `trained_model/<name>/selector/`
-- Logging path conventions:
+- Timesteps per run: total steps = `save_interval × total_saving`. Production: `100000 × 30 = 3M`. Smoke: `100 × 2 = 200`.
+- Seed set: fixed seed for smoke reproducibility (e.g. `123456`); production uses 5 seeds (`config.yaml`).
+- Hyperparameter source: `config.yaml` (`batch_size`, `n_epochs`, `learning_rate`, `n_envs`, `window_size`, `tail_size`, `buffer_size`).
+- Checkpoint cadence: every `save_interval` steps to `trained_model/<trace>/<seed>/<algo>/selector/<step>.zip`.
+- Logging: manifest row per run in `logs/run_log.csv`; per-rule logs under `logs/snakemake/<trace>/`.
 
 ### Command Template
 
 ```bash
-python src/train_agents.py --algo <algo> --trace splits/<trace>_dev70.tsv --seed <seed> --save_interval <n> --total_saving <k>
+python -m src.train_agents --algorithm <algo> --name <run_name> \
+  --trace data/splits/<trace>_dev70.tsv --seed <seed> \
+  --save_interval <n> --total_saving <k>
 ```
 
 Note for DQN smoke on high-dimensional dict observations:
@@ -69,15 +71,18 @@ Note for DQN smoke on high-dimensional dict observations:
 
 ## 6. Evaluation Protocol
 
-- Deterministic/stochastic policy mode:
-- Evaluation trace/split:
-- Evaluation outputs:
-- Resource profiling method:
+- Deterministic/stochastic policy mode: `eval_deterministic` (config; default deterministic).
+- Development evaluation trace: the `*_dev70.tsv` split each model trained on (from the manifest).
+- Holdout evaluation: after `select_best`, the winning algorithm is re-evaluated across all seeds on the reserved `*_holdout30.tsv` split (`holdout_eval` → `holdout_aggregate` → `result/<trace>/holdout/holdout_summary.csv`). This is the only use of the holdout; no tuning is performed on it.
+- Evaluation outputs: per-run metrics CSV/JSON under `result/<trace>/eval_runs/runs/`; holdout under `result/<trace>/holdout/`.
+- Resource profiling: per-decision latency (`decision_latency_mean_ms`) and eval wall time captured per run.
 
 ### Command Template
 
 ```bash
-python src/evaluate_agents.py --models-dir <dir> --split <split_id> --output <dir>
+python -m src.evaluate_agents --manifest logs/run_log.csv \
+  --output-dir result/<trace>/eval_runs \
+  --filter-seed <seed> --filter-algo <algo> --deterministic
 ```
 
 ## 7. Metrics
@@ -103,16 +108,16 @@ python src/evaluate_agents.py --models-dir <dir> --split <split_id> --output <di
 
 ## 8. Statistical Workflow
 
-Sequence:
+Sequence (as implemented in `src/statistical_test.py`):
 
-1. Shapiro-Wilk (diagnostic only; low power at small n)
-2. Friedman (omnibus)
-3. Conover (post-hoc)
-4. Kendall's W (effect size)
-5. Vargha-Delaney A (pairwise effect size)
-6. bootstrap 95% CI
-7. CD diagram inputs
-8. Pareto analysis
+1. Shapiro-Wilk (normality diagnostic only; report-only, non-blocking)
+2. Friedman (omnibus non-parametric repeated-measures)
+3. Kendall's W (effect size for the Friedman result)
+4. Nemenyi post-hoc (only if Friedman is significant) → `pairwise_nemenyi.csv`
+5. Wilcoxon signed-rank non-parametric CIs (pairwise) → `confidence_intervals.csv`
+6. Page trend test (convergence/ordering) → `page_trend.csv`
+7. CD diagram inputs → `cd_diagram_input.csv`
+8. Pareto analysis (in `select_best`)
 
 Notes:
 
@@ -121,7 +126,8 @@ Notes:
 ### Command Template
 
 ```bash
-python src/statistical_test.py --input <aggregate_csv> --output <analysis_dir>
+python -m src.statistical_test --seed-summary result/<trace>/aggregate/seed_summary.csv \
+  --output-dir result/<trace>/stats --alpha 0.05
 ```
 
 ## 9. Output Contracts

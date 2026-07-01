@@ -13,11 +13,11 @@ Use this file to map every claim in Submission 2 to concrete project evidence.
 | Claim ID | Paper Section | Claim Summary | Evidence Type | Source Path | Artefact Path | Status |
 |---|---|---|---|---|---|---|
 | C-001 | Methodology | 6 algorithms selected for comparison | protocol | `Project_Github/docs/methodology_protocol.md` | | in_progress |
-| C-002 | Methodology | time-aware holdout policy enforced | policy doc | `Project_Github/docs/data_split_policy.md` | `github_repos/herasched/data/splits/logs/<split_id>.json` | in_progress |
-| C-003 | Methods Workflow | interim local maskable smoke gate completed | run log | `Project_Github/docs/workflow_local.md` | `github_repos/herasched/trained_model/smoke_a2c_mask_on/selector/1000.zip`; `github_repos/herasched/trained_model/smoke_dqn_mask_on/selector/1000.zip`; `github_repos/herasched/trained_model/smoke_dqn_mask_off/selector/1000.zip` | in_progress |
-| C-004 | Methods Workflow | pipeline automated with Snakemake | workflow doc | `Project_Github/docs/snakemake_pipeline.md` | | in_progress |
-| C-005 | Evaluation | deterministic eval outputs generated | result files | | | pending |
-| C-006 | Statistics | Friedman/Conover + Kendall's W + VDA flow implemented | analysis output | | | pending |
+| C-002 | Methodology | time-aware holdout policy enforced | policy doc | `docs/data_split_policy.md` | `data/splits/logs/<trace>_r70.json` | in_progress |
+| C-003 | Methods Workflow | local maskable smoke gate completed | run log | `docs/workflow_local.md` | `trained_model/<trace>/<seed>/<algo>/selector/<step>.zip` | in_progress |
+| C-004 | Methods Workflow | pipeline automated with Snakemake | workflow doc | `docs/snakemake_pipeline.md` | | in_progress |
+| C-005 | Evaluation | deterministic eval outputs generated | result files | `src/evaluate_agents.py` | `result/<trace>/eval_runs/runs/*.csv` | pending |
+| C-006 | Statistics | Friedman + Kendall's W + Nemenyi + Wilcoxon CIs + Page trend implemented | analysis output | `src/statistical_test.py` | `result/<trace>/stats/` | pending |
 
 Notes:
 

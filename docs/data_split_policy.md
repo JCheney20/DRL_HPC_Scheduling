@@ -11,9 +11,9 @@ Use this file to formalize split rules and leakage controls.
 
 ## 2. Data Sources
 
-- Trace files: `data/physical_job.csv`, `data/deeplearn_job.csv` (selected via split script `--source`)
+- Trace files: `data/physical_job.csv`, `data/deeplearn_job.csv` (selected via `--src`)
 - Topology files: `data/topology/physical_topology.txt`, `data/topology/nodes.csv`
-- Preprocessing scripts: `github_repos/herasched/scripts/make_split.py`
+- Split script: `src/make_split.py`, invoked as `python -m src.make_split`
 
 ## 3. Split Definition
 
@@ -36,8 +36,8 @@ Example:
 ## 5. Leakage Prevention Controls
 
 - Holdout access controls: final holdout is generated as separate `*_holdout30.tsv` artefact and excluded from tuning runs
-- Script-level guardrails: `train_agents.py` rejects holdout-like training traces before environment setup
-- Config flags that prevent accidental tuning on holdout: training commands must target `splits/*_dev70.tsv`; holdout training is fail-fast by design
+- Script-level guardrails: `src/train_agents.py` rejects holdout-like training traces before environment setup
+- Config flags that prevent accidental tuning on holdout: training commands must target `data/splits/*_dev70.tsv`; holdout training is fail-fast by design
 
 Current holdout guard rule in training entrypoint:
 

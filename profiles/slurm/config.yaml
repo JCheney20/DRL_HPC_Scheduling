@@ -1,7 +1,7 @@
 executor: slurm
 jobs: 100
 use-singularity: true
-apptainer-args: "--nv"
+apptainer-args: "--nv --bind /scratch"   # --bind /scratch so the container can write through symlinked output dirs (trained_model/, result/, logs/ -> /scratch); see docs/workflow_hpc.md
 latency-wait: 60
 rerun-incomplete: true
 default-resources:

@@ -59,6 +59,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Only evaluate runs matching this algorithm.",
     )
+    parser.add_argument(
+        "--filter-treatment",
+        type=str,
+        default=None,
+        help="Only evaluate runs matching this treatment_id (e.g. the winner from best_algorithm.json).",
+    )
+    parser.add_argument(
+        "--eval-trace",
+        type=str,
+        default=None,
+        help="Override the evaluation trace (e.g. the holdout split). "
+        "Default: the manifest trace_file (the trace the model trained on).",
+    )
     add_standard_debug_args(parser)
     return parser.parse_args()
 
@@ -109,12 +122,12 @@ def validate_run_spec(spec: RunSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_env(spec: RunSpec, seed: int | None) -> HPCsim:
+def build_env(spec: RunSpec, seed: int | None, eval_trace: str | None = None) -> HPCsim:
     return HPCsim(
         topology_file=f"data/topology/{spec.topology_file}",
         allocator="best_fit",
         node_file=f"data/topology/{spec.node_file}",
-        trace_file=f"{spec.trace_file}",
+        trace_file=f"{eval_trace or spec.trace_file}",
         random_job=False,
         seed=seed,
         window_size=spec.window_size,
@@ -132,11 +145,12 @@ def evaluate_one_run(
     deterministic: bool,
     seed_override: int | None = None,
     max_steps: int | None = None,
+    eval_trace: str | None = None,
 ) -> EvalResult:
     seed = spec.seed if seed_override is None else seed_override
 
     validate_run_spec(spec)
-    env = build_env(spec, seed=seed)
+    env = build_env(spec, seed=seed, eval_trace=eval_trace)
     model = load_model(spec, env)
     obs, _ = env.reset(seed=seed)
     done = False
@@ -189,7 +203,7 @@ def evaluate_one_run(
         seed=seed,
         split_id=spec.split_id,
         model_path=spec.model_path,
-        trace_file=spec.trace_file,
+        trace_file=eval_trace or spec.trace_file,
         topology_file=spec.topology_file,
         node_file=spec.node_file,
         episode_reward=episode_reward,
@@ -263,6 +277,12 @@ def main() -> None:
             print(f"[WARN] No runs found for algorithm {args.filter_algo} in manifest")
             sys.exit(0)
 
+    if args.filter_treatment is not None:
+        specs = [s for s in specs if s.treatment_id == args.filter_treatment]
+        if not specs:
+            print(f"[WARN] No runs found for treatment {args.filter_treatment} in manifest")
+            sys.exit(0)
+
     if args.limit_runs is not None:
         specs = specs[-args.limit_runs :]
 
@@ -276,6 +296,7 @@ def main() -> None:
                 deterministic=args.deterministic,
                 seed_override=args.seed_override,
                 max_steps=args.max_steps,
+                eval_trace=args.eval_trace,
             )
             metadata = build_eval_metadata(
                 command_args=sys.argv,
