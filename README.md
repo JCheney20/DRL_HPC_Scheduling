@@ -63,7 +63,9 @@ conda install --file requirements.txt
 The full workflow is managed by [Snakemake](https://snakemake.readthedocs.io) and orchestrated through [`just`](https://just.systems) — a command runner that wraps the verbose Snakemake invocations into short, memorable commands. No need to remember `--configfile`, `--profile`, or `--cores` flags.
 
 ### Local
+
 <div align="center">
+  
 | Command | Description |
 |---------|-------------|
 | `just dry_run_smoke` | Validate the smoke DAG without running any jobs |
@@ -71,16 +73,22 @@ The full workflow is managed by [Snakemake](https://snakemake.readthedocs.io) an
 | `just run_full` | Full pipeline: train → eval → aggregate → stats |
 | `just clean` | Remove outputs; preserve logs |
 | `just clean_all` | Remove all outputs including logs (full reset) |
+
 </div>
+
 ### Cluster (SLURM)
+
 <div align="center">
+  
 | Command | Description |
 |---------|-------------|
 | `just dry_run_slurm` | Validate the production DAG for cluster submission |
 | `just dry_run_smoke_slurm` | Validate the smoke DAG for cluster submission |
 | `just run_smoke_slurm` | Submit smoke test to SLURM |
 | `just run_full_slurm` | Submit full pipeline to SLURM |
+
 </div>
+
 Run `just help` to see all available targets.
 
 ---
