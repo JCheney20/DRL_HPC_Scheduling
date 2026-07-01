@@ -52,7 +52,7 @@ save_interval: 100000
 total_saving: 30                   # total timesteps = save_interval * total_saving = 3M steps (~2.8 h at n_envs=20)
 window_size: 512
 tail_size: 64
-buffer_size: 1_000_000
+buffer_size: 200_000               # DQN replay buffer. Dict obs (~130 KB/transition, float64 ×2 for obs+next_obs) → ~52 GB. 1M would need ~260 GB and OOMs the 128 GB nodes. Dict obs forbids optimize_memory_usage in SB3.
 n_envs: 20                         # SubprocVecEnv workers for PPO/A2C (DQN stays single-env); 20 workers + 1 main = 21 of 24 cores
 batch_size: 2048                   # minibatch size: PPO (buffer=n_envs*n_steps=40960, 20 batches/epoch × 5 epochs=100 steps); DQN (replay sample size)
 n_epochs: 5                        # PPO optimisation epochs per rollout (SB3 default 10; halved to cut update time)

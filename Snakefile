@@ -205,7 +205,7 @@ rule train_agent:
         seed=r"\d+",
         algo="|".join(ALGORITHMS),
     resources:
-        mem_mb=65536,   # 64 GB: 20 SubprocVecEnv workers + DQN 1M replay buffer + model overhead
+        mem_mb=98304,   # 96 GB: DQN 200k replay buffer (~52 GB, float64 dict obs ×2) + CUDA/model overhead; PPO/A2C use far less (20 workers, no replay buffer). 128 GB nodes.
         runtime=480,    # 8 h ceiling: 3M steps ≈ 5.2 h at ~265 s/iter (rollout-bound), headroom for slow nodes
         slurm_partition="main",
         gres="gpu:1",
@@ -234,6 +234,8 @@ rule train_agent:
         export OMP_NUM_THREADS=1
         export OPENBLAS_NUM_THREADS=1
         export MKL_NUM_THREADS=1
+        # Unbuffered so a hard crash (e.g. OOM kill) still flushes its traceback to the log.
+        export PYTHONUNBUFFERED=1
         mkdir -p trained_model/{params.trace_name}/{wildcards.seed}/{wildcards.algo}
         python -m src.train_agents \
             --algorithm {wildcards.algo} \

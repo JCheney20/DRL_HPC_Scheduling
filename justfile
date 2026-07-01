@@ -34,8 +34,7 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "  dry_run_smoke        - Validate smoke DAG without execution"
     echo "  dry_run              - Validate production DAG without execution"
     echo "  run_smoke            - Smoke test (fast end-to-end validation)"
-    echo "  run_full             - Full production pipeline (train → eval → aggregate → stats)"
-    echo "  run_full_with_base   - Full pipeline + baseline comparison"
+    echo "  run_full             - Full pipeline (train → eval → aggregate → stats → baseline → holdout)"
     echo "  run_baseline         - Run baseline scheduler only"
     echo ""
     echo "DAG EXPORT TARGETS:"
@@ -48,7 +47,6 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "  dry_run_slurm        - Validate production DAG for cluster"
     echo "  run_smoke_slurm      - Submit smoke test to SLURM"
     echo "  run_full_slurm       - Submit full pipeline to SLURM"
-    echo "  run_full_with_base_slurm - Submit full pipeline + baseline to SLURM"
     echo "  archive_results      - Copy results + winning models off scratch to \$HOME/drl_archive"
     echo "  slurm_report         - Generate efficiency report after run"
     echo "  build_sif            - Build Apptainer .sif from Nix flake"
@@ -100,23 +98,13 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
         --cores {{cpu_count}}
     echo "✓ Full pipeline complete. Outputs in result/{{TRACE}}/"
 
-@run_full_with_base:
-    echo "Running full pipeline with baseline on {{TRACE}}..."
-    snakemake \
-        --configfile config.yaml \
-        result/{{TRACE}}/stats/stats_summary.json \
-        result/{{TRACE}}/baseline/baseline_metadata.json \
-        --config trace_name={{TRACE}} \
-        --cores {{cpu_count}}
-    echo "✓ Full pipeline + baseline complete."
-
 @run_baseline:
     echo "Running baseline scheduler (FCFS + best_fit) on {{TRACE}}..."
     snakemake \
         --configfile config.yaml \
-        result/{{TRACE}}/baseline/baseline_metadata.json \
         --config trace_name={{TRACE}} \
-        --cores {{cpu_count}}
+        --cores {{cpu_count}} \
+        result/{{TRACE}}/baseline/baseline_metadata.json
     echo "✓ Baseline complete. Outputs in result/{{TRACE}}/baseline/"
 
 # =============================================================================
@@ -146,16 +134,6 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
         --config trace_name={{TRACE}} \
         --profile profiles/slurm
     echo "✓ Full pipeline submitted. Check squeue for status."
-
-@run_full_with_base_slurm:
-    echo "Submitting full pipeline + baseline to SLURM on {{TRACE}}..."
-    snakemake \
-        --configfile config.yaml \
-        result/{{TRACE}}/stats/stats_summary.json \
-        result/{{TRACE}}/baseline/baseline_metadata.json \
-        --config trace_name={{TRACE}} \
-        --profile profiles/slurm
-    echo "✓ Submitted. Check squeue for status."
 
 # Copy analysis outputs (and the winning algo's final models) off scratch into
 # safe home storage. Idempotent — run it after eval to snapshot the
