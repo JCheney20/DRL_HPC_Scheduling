@@ -1,0 +1,9 @@
+SwitchName=sp-266-p16-1 Level=1 LinkSpeed=1 Switches=le-266-q11-1-res,le-266-q14-1-res,le-266-r17-1-res,le-266-r19-1-res
+
+SwitchName=le-266-q11-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[053-066]
+
+SwitchName=le-266-q14-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[087-125]
+
+SwitchName=le-266-r17-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[001-020]
+
+SwitchName=le-266-r19-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[021-029],spartan-bm[039-043]

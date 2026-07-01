@@ -21,7 +21,7 @@ from typing import Any
 
 import pandas as pd
 
-from utils import (
+from src.utils import (
     ALGO_KEYS,
     CANON_KEYS,
     CORE_METRICS,
@@ -137,7 +137,7 @@ def aggregate_train_time(eval_wide: pd.DataFrame, strict: bool) -> pd.DataFrame:
         return pd.DataFrame(
             columns=(GROUP_SET + ["wall_clock_s_mean", "wall_clock_s_std", "wall_clock_s_count"]))  # type: ignore
 
-    train_df = pd.concat(records, ignore_index=True)
+    train_df = pd.DataFrame(records)
     agg = (
         train_df.groupby(GROUP_SET)["wall_clock_s"]
         .agg(["mean", "std", "count"])

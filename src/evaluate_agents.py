@@ -18,8 +18,8 @@ import numpy as np
 import pandas as pd
 from sb3_contrib.common.maskable.utils import get_action_masks
 
-from HPCsim.HPCsim import HPCsim
-from utils import (
+from src.HPCsim.HPCsim import HPCsim
+from src.utils import (
     ALGORITHMS,
     EvalResult,
     RunSpec,
@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Only evaluate runs matching this seed.",
+    )
+    parser.add_argument(
+        "--filter-algo",
+        type=str,
+        default=None,
+        help="Only evaluate runs matching this algorithm.",
     )
     add_standard_debug_args(parser)
     return parser.parse_args()
@@ -108,7 +114,7 @@ def build_env(spec: RunSpec, seed: int | None) -> HPCsim:
         topology_file=f"data/topology/{spec.topology_file}",
         allocator="best_fit",
         node_file=f"data/topology/{spec.node_file}",
-        trace_file=f"data/{spec.trace_file}",
+        trace_file=f"{spec.trace_file}",
         random_job=False,
         seed=seed,
         window_size=spec.window_size,
@@ -249,6 +255,12 @@ def main() -> None:
         specs = [s for s in specs if s.seed == args.filter_seed]
         if not specs:
             print(f"[WARN] No runs found for seed {args.filter_seed} in manifest")
+            sys.exit(0)
+
+    if args.filter_algo is not None:
+        specs = [s for s in specs if s.algorithm == args.filter_algo]
+        if not specs:
+            print(f"[WARN] No runs found for algorithm {args.filter_algo} in manifest")
             sys.exit(0)
 
     if args.limit_runs is not None:

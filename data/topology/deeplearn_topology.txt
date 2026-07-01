@@ -1,0 +1,9 @@
+SwitchName=sp-266-p16-1 Level=1 LinkSpeed=1 Switches=le-266-q08-1-res,le-266-q11-1-res,le-266-r17-1-res,le-266-r21-1-res
+
+SwitchName=le-266-q08-1-res Level=0 LinkSpeed=1 Nodes=spartan-gpgpu[072-075],spartan-gpgpu[078-082]
+
+SwitchName=le-266-q11-1-res Level=0 LinkSpeed=1 Nodes=spartan-gpgpu[086-088]
+
+SwitchName=le-266-r17-1-res Level=0 LinkSpeed=1 Nodes=spartan-gpgpu[091-096]
+
+SwitchName=le-266-r21-1-res Level=0 LinkSpeed=1 Nodes=spartan-gpgpu[132-134],spartan-gpgpu[135-143]

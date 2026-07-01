@@ -1,5 +1,10 @@
 {
-  description = "Python RL scheduling environment";
+  description = "Python RL scheduling environment (GPU container, CPU/AMD host shell)";
+
+  nixConfig = {
+    extra-substituters = [ "https://cache.nixos-cuda.org" ];
+    extra-trusted-public-keys = [ "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M=" ];
+  };
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -10,63 +15,60 @@
   outputs = { self, nixpkgs, nixpkgs-stable, utils }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs-stable.legacyPackages.${system};
-      python = pkgs.python312;
-    in
-    {
+
+      # Single overlay: replaces source PyTorch with binary wheels.
+      # The binary wheels ignore config.cudaSupport and ship their own CUDA runtime.
+      torchBinOverlay = final: prev: {
+        python312 = prev.python312.override {
+          packageOverrides = pyFinal: pyPrev: {
+            torch = pyPrev.torch-bin;
+            torchvision = pyPrev.torchvision-bin;
+            stable-baselines3 = pyPrev.stable-baselines3.overridePythonAttrs (old: { doCheck = false; });
+            gymnasium = pyPrev.gymnasium.overridePythonAttrs (old: { doCheck = false; });
+          };
+        };
+      };
+
+      # Single package set (CPU-only config). No global cudaSupport needed.
+      pkgs = import nixpkgs-stable {
+        inherit system;
+        config = { allowUnfree = true; };
+        overlays = [ torchBinOverlay ];
+      };
+
+      # Unified python environment
+      myPythonEnv = pkgs.python312.withPackages (ps: with ps; [
+        numpy pandas matplotlib pillow sympy networkx
+        gymnasium torch torchvision stable-baselines3
+        tensorboard tensorboard-data-server protobuf grpcio markdown
+        cloudpickle filelock fsspec packaging six typing-extensions
+        tzdata pytz scikit-posthocs scipy python-dateutil
+
+        # Custom derivations
+        (ps.callPackage ./nix/sb3-contrib.nix {})
+        (ps.callPackage ./nix/paretoset.nix {})
+        (ps.callPackage ./nix/snakemake_slurm.nix {})
+        (ps.callPackage ./nix/snakemake_slurm_jobstep.nix {})
+      ]);
+    in {
       devShells.${system}.default = pkgs.mkShell {
-        packages = [
-          (python.withPackages (ps: with ps; [
-            # Core numerics / data
-            numpy
-            pandas
-            matplotlib
-            pillow
-            sympy
-            networkx
+        # Optional: expose GPU on nvidia hosts via host driver
+        LD_LIBRARY_PATH = "/run/opengl-driver/lib";
+        packages = [ myPythonEnv pkgs.snakemake pkgs.graphviz pkgs.just pkgs.skopeo pkgs.apptainer pkgs.tmux ];
+      };
 
-            # RL / ML
-            gymnasium
-            stable-baselines3
-            (python.pkgs.callPackage ./sb3-contrib.nix {} )
-            torch
-            torchvision
-
-            # TensorBoard
-            tensorboard
-            tensorboard-data-server
-            protobuf
-            grpcio
-            markdown
-            werkzeug
-            absl-py
-
-            # Utilities
-            cloudpickle
-            filelock
-            fsspec
-            packaging
-            six
-            typing-extensions
-            tzdata
-            pytz
-            scikit-posthocs
-            scipy
-            python-dateutil
-            snakemake
-          ]))
-        ] ++ [pkgs.snakemake pkgs.graphviz pkgs.just];
-
-        shellHook = ''
-          echo "HeraSched Environment Loaded"
-          echo "Python: $(python --version)"
-          echo "PyTorch: $(python -c 'import torch; print(torch.__version__)')"
-          echo "Stable-Baselines3: $(python -c 'import stable_baselines3; print(stable_baselines3.__version__)')"
-          echo "Gymnasium: $(python -c 'import gymnasium; print(gymnasium.__version__)')"
-
-          export PYTHONDONTWRITEBYTECODE=1
-          export PYTHONOPTIMIZE=1
-        '';
+      # GPU-enabled PyTorch without pulling cudaSupport into every other package.
+      # torch-bin bundles its own CUDA runtime; works inside the container
+      # if the host driver is mounted (e.g. apptainer --nv).
+      packages.${system}.container = pkgs.dockerTools.streamLayeredImage {
+        name = "DRL_env";
+        tag = "latest";
+        contents = pkgs.buildEnv {
+          name = "image-root";
+          paths = [ myPythonEnv pkgs.snakemake pkgs.coreutils pkgs.bashInteractive ];
+          pathsToLink = [ "/" ];
+        };
+        config = { Env = [ "PATH=${myPythonEnv}/bin:${pkgs.snakemake}/bin" ]; };
       };
     };
 }

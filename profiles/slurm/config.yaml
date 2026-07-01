@@ -1,0 +1,11 @@
+executor: slurm
+jobs: 100
+use-singularity: true
+apptainer-args: "--nv"
+latency-wait: 60
+rerun-incomplete: true
+default-resources:
+  slurm_partition: "main"
+  mem_mb: 8192
+  runtime: 120
+  cpus_per_task: 4

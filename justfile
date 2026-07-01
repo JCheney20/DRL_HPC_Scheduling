@@ -33,7 +33,6 @@ TRACE := env_var_or_default("TRACE", "physical_job")
     echo "  run_full             - Full production pipeline (train → eval → aggregate → stats)"
     echo "  run_full_with_base   - Full pipeline + baseline comparison"
     echo "  run_baseline         - Run baseline scheduler only"
-    echo "  test_stats           - Test statistical_test.py on synthetic data"
     echo ""
     echo "DAG EXPORT TARGETS:"
     echo "  export_dag           - Export both detail + overview DAGs"
@@ -80,7 +79,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
 
 @run_smoke:
     echo "Running smoke test pipeline on {{TRACE}}..."
-    echo "Config: config.smoke.yaml (2 seeds, 1000 timesteps, max-steps=500)"
+    echo "Config: config.smoke.yaml (2 seeds, 200 timesteps, max-steps=5)"
     snakemake \
         --configfile config.smoke.yaml \
         --config trace_name={{TRACE}} \
@@ -89,7 +88,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
 
 @run_full:
     echo "Running full production pipeline on {{TRACE}}..."
-    echo "Config: config.yaml (5 seeds, 10M timesteps)"
+    echo "Config: config.yaml (5 seeds, 3M timesteps)"
     snakemake \
         --configfile config.yaml \
         --config trace_name={{TRACE}} \
@@ -115,39 +114,24 @@ TRACE := env_var_or_default("TRACE", "physical_job")
         --cores {{cpu_count}}
     echo "✓ Baseline complete. Outputs in result/{{TRACE}}/baseline/"
 
-@test_stats:
-    echo "Generating synthetic seed summary..."
-    python scripts/generate_synthetic_seed_summary.py \
-        --output result/stats_smoke/synthetic_seed_summary.csv \
-        --n-algorithms 6 \
-        --n-seeds 5 \
-        --seed 42
-    echo "Running statistical_test.py on synthetic data..."
-    python statistical_test.py \
-        --input result/stats_smoke/synthetic_seed_summary.csv \
-        --output-dir result/stats_smoke \
-        --bootstrap-reps 100 \
-        --bootstrap-seed 42
-    echo "✓ Stats smoke test complete. Outputs in result/stats_smoke/"
-
 # =============================================================================
 # SLURM CLUSTER TARGETS
 # =============================================================================
 
 @dry_run_smoke_slurm:
     echo "Validating smoke DAG for cluster (no execution)..."
-    snakemake --configfile config.smoke.yaml --profile herasched --dry-run --quiet
+    snakemake --configfile config.smoke.yaml --profile profiles/slurm --dry-run --quiet
 
 @dry_run_slurm:
     echo "Validating production DAG for cluster (no execution)..."
-    snakemake --configfile config.yaml --profile herasched --dry-run --quiet
+    snakemake --configfile config.yaml --profile profiles/slurm --dry-run --quiet
 
 @run_smoke_slurm:
     echo "Submitting smoke test to SLURM on {{TRACE}}..."
     snakemake \
         --configfile config.smoke.yaml \
         --config trace_name={{TRACE}} \
-        --profile herasched
+        --profile profiles/slurm
     echo "✓ Smoke jobs submitted. Check squeue for status."
 
 @run_full_slurm:
@@ -155,7 +139,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
     snakemake \
         --configfile config.yaml \
         --config trace_name={{TRACE}} \
-        --profile herasched
+        --profile profiles/slurm
     echo "✓ Full pipeline submitted. Check squeue for status."
 
 @run_full_with_base_slurm:
@@ -165,18 +149,28 @@ TRACE := env_var_or_default("TRACE", "physical_job")
         --config trace_name={{TRACE}} \
         result/{{TRACE}}/stats/stats_summary.json \
         result/{{TRACE}}/baseline/baseline_metadata.json \
-        --profile herasched
+        --profile profiles/slurm
     echo "✓ Submitted. Check squeue for status."
 
 @slurm_report:
     echo "Generating SLURM efficiency report..."
-    snakemake --configfile config.yaml --profile herasched --slurm-efficiency-report
+    snakemake --configfile config.yaml --profile profiles/slurm --slurm-efficiency-report
 
 @build_sif:
     echo "Building Apptainer .sif from Nix flake..."
-    nix build .#container
-    apptainer pull herasched.sif docker-archive://$(readlink result)
-    echo "✓ herasched.sif ready"
+    # 1. Build the container script using Nix
+    nix build -L .#container -o nix-container-result 2>&1 | tee build.log
+    
+    # 2. Execute the script to stream the Docker archive to a tar file
+    ./nix-container-result > DRL_env_docker.tar
+    
+    # 3. Build the Apptainer .sif directly from the Docker tarball
+    apptainer build DRL_env.sif docker-archive://DRL_env_docker.tar
+    
+    # 4. Clean up the large temporary files
+    rm -f DRL_env_docker.tar nix-container-result
+    echo "✓ DRL_env.sif ready"
+
 
 
 # =============================================================================
@@ -193,7 +187,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
             -Nshape=box \
             -Nstyle=rounded \
             -Efontsize=10 \
-        -o plots/{{TRACE}}_dag_detail.dot
+        -o plots/{{TRACE}}_dag_detail.svg
     echo "✓ Job DAG exported to plots/{{TRACE}}_dag_detail.svg"
 
 @export_dag_overview:
@@ -206,7 +200,7 @@ TRACE := env_var_or_default("TRACE", "physical_job")
             -Nshape=box \
             -Nstyle=rounded \
             -Efontsize=10 \
-        -o plots/{{TRACE}}_dag_overview.dot
+        -o plots/{{TRACE}}_dag_overview.svg
     echo "✓ Rule DAG exported to plots/{{TRACE}}_dag_overview.svg"
 
 @export_dag:

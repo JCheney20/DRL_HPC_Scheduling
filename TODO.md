@@ -140,3 +140,121 @@ cover the point or if a clarification is needed.
     performed across multiple seeds (no tuning on holdout).
 [☑] [SHOULD] [DONE] Mention that plots/tables are generated from pipeline outputs
     (eval_wide/seed_summary/stats) and exported as PNG/CSV for Typst inclusion.
+
+
+--------------------------------------------------------------------------------
+Phase 0 — Configuration & Schema (Unblockers)
+--------------------------------------------------------------------------------
+
+config.yaml
+[ ] [MUST] [PENDING] Add `pareto_metrics` key (list, default: ["avg_waiting", "avg_slowdown", "cpu_utilization"]). (config.yaml:26)
+[ ] [MUST] [PENDING] Add `pareto_tiebreakers` key (list, default: ["avg_waiting", "avg_slowdown", "cpu_utilization"]). (config.yaml:26)
+[ ] [MUST] [PENDING] Add `visualization` toggle block (e.g., `plots_enabled`, `tables_enabled`). (config.yaml:26)
+[ ] [MUST] [PENDING] Add `baseline_selectors` and `baseline_allocators` to allow config-driven baseline execution. (config.yaml:41)
+[ ] [MUST] [PENDING] Ensure `baseline_only` logic is respected by the Snakefile entry point `rule all`. (config.yaml:50)
+
+--------------------------------------------------------------------------------
+Phase 1 — Orchestration (Snakefile)
+--------------------------------------------------------------------------------
+
+Snakefile
+[ ] [MUST] [PENDING] Fix `train_agents.py` trace path: use `data/splits/{SPLIT_ID}.tsv` or ensure trace is found. (Snakefile:185)
+[ ] [MUST] [PENDING] Fix `EVAL_MAX_STEPS_FLAG` syntax: ensure empty string leaves no trailing space. (Snakefile:76)
+[ ] [MUST] [PENDING] Fix `filter_seed` parameter expansion in `eval_seed` rule; validate it passes to `evaluate_agents.py`. (Snakefile:229)
+[ ] [MUST] [PENDING] Fix `train_seed` resource block indentation (currently `resources:` is 1-space indented). (Snakefile:152)
+[ ] [MUST] [PENDING] Add `split_id` to `train_seed` shell call (currently hardcoded to `{TRACE_NAME}_r70`). (Snakefile:190)
+[ ] [MUST] [PENDING] Fix `baseline` rule: `wildcards.seed` is undefined (no wildcard in rule). Either add `seed` wildcard or remove reference. (Snakefile:350)
+[ ] [MUST] [PENDING] Fix `baseline` rule: `--split_id {input.dev_split}` passes file path, not split ID string; change to use `SPLIT_ID`. (Snakefile:351)
+[ ] [MUST] [PENDING] Fix `baseline` rule: `--force False` is treated as a positional arg; remove or use `--no-force` flag correctly. (Snakefile:355)
+[ ] [MUST] [PENDING] Fix `select_best` rule inputs: path to `algorithm_summary.csv` is missing `algorithm_summary` intermediate. (Snakefile:362)
+[ ] [MUST] [PENDING] Fix `visualise` rule: `visualise.py` does not support `--mode results`, `--stats-dir`, `--aggregate-dir`, or `--trace-name`; align args. (Snakefile:395)
+[ ] [MUST] [PENDING] Wire `select_best` and `visualise` into `rule all` inputs. (Snakefile:109)
+[ ] [SHOULD] [PENDING] Add error handling (e.g., `set -euo pipefail`) and `trap` for cleanup in shell rules. (Snakefile:170)
+[ ] [SHOULD] [PENDING] Parameterize Snakefile for `baseline_only` mode so `rule all` does not require RL stages when enabled. (Snakefile:107)
+[ ] [SHOULD] [PENDING] Consider using `shadow` directive for training rules to avoid logs clobbering. (Snakefile:152)
+
+--------------------------------------------------------------------------------
+Phase 2 — Core Utilities (src/utils.py)
+--------------------------------------------------------------------------------
+
+src/utils.py
+[ ] [MUST] [PENDING] Add docstrings to `load_split_metadata` explaining `splits_log_dir` and `split_id` parameters. (src/utils.py:604)
+[ ] [MUST] [PENDING] Validate `load_split_metadata` return value: ensure it contains expected keys (e.g., `split_id`, `dev_path`); consumers (e.g., train_agents.py) rely on these. (src/utils.py:604)
+[ ] [SHOULD] [PENDING] Move `HOLDOUT_PATTERNS` to a more central place or validate against manifest before pipeline starts. (src/utils.py:165)
+[ ] [NICE] [PENDING] Centralize default paths (e.g., `logs/run_log.csv`, `data/splits/`) in a constants section at the top of `src/utils.py`. (src/utils.py:640)
+
+--------------------------------------------------------------------------------
+Phase 3 — Data Splitting (Project_Github/src/make_split.py)
+--------------------------------------------------------------------------------
+
+Project_Github/src/make_split.py
+[ ] [MUST] [PENDING] Add `--seed` argument (optional, default None) and pass to `HPCsim` initialization to ensure deterministic splitting if needed. (make_split.py:9)
+[ ] [MUST] [PENDING] Replace direct `print` with a proper logger for standard output in `parse_args` to avoid interfering with CLI consumers. (make_split.py:32)
+[ ] [SHOULD] [PENDING] Validate that `Submit` column is monotonically increasing after sort; warn if not. (make_split.py:63)
+[ ] [SHOULD] [PENDING] Accept `--source` path as a file path, not just a preset name, to support future datasets. (make_split.py:11)
+
+--------------------------------------------------------------------------------
+Phase 4 — Training (train_agents.py)
+--------------------------------------------------------------------------------
+
+train_agents.py
+[ ] [MUST] [PENDING] Guard `split_id` manipulation for `None` to prevent `AttributeError` when `--split_id` is omitted. (train_agents.py:202)
+[ ] [MUST] [PENDING] Validate that `algo_class` returned from `resolve_algorithm_config` is not None (adds robustness). (train_agents.py:261)
+[ ] [SHOULD] [PENDING] Add checkpoint resume logic for `train_and_log` to allow HPC job resubmissions without restarting from step 0. (train_agents.py:286)
+[ ] [SHOULD] [PENDING] Flush or write intermediate metadata after each `model.save` call for better recovery visibility. (train_agents.py:321)
+
+--------------------------------------------------------------------------------
+Phase 5 — Evaluation (evaluate_agents.py)
+--------------------------------------------------------------------------------
+
+evaluate_agents.py
+[ ] [MUST] [PENDING] Validate that all `RunSpec` fields loaded from manifest match the expected types (e.g., `window_size` is int) to prevent downstream exceptions. (evaluate_agents.py:65)
+[ ] [MUST] [PENDING] Ensure `EvalResult` includes `decision_count` and `decision_latency_mean_ms` in the CSV output (check `write_dict_outputs`). (evaluate_agents.py:210)
+[ ] [SHOULD] [PENDING] Add optional `--parallel` flag for multi-process evaluation (useful for HPC), ensuring safe model loading. (evaluate_agents.py:42)
+[ ] [SHOULD] [PENDING] Add progress logging (e.g., `tqdm`) for large trace evaluations. (evaluate_agents.py:124)
+
+--------------------------------------------------------------------------------
+Phase 6 — Aggregation (aggregate_results.py)
+--------------------------------------------------------------------------------
+
+aggregate_results.py
+[ ] [MUST] [PENDING] Remove hardcoded `TRAD_ALGORITHMS` in `aggregate_train_time`; use configuration or manifest instead. (aggregate_results.py:143)
+[ ] [MUST] [PENDING] Ensure `aggregate_train_time` handles cases where `train_metadata.json` is missing critical keys (e.g., `wall_clock_s`). (aggregate_results.py:156)
+[ ] [MUST] [PENDING] Verify `algorithm_summary.csv` includes `treatment_id`, `algorithm`, and `use_masking` to satisfy `select_best.py` input contract. (aggregate_results.py:135)
+[ ] [SHOULD] [PENDING] Add `--strict` logic to fail if any expected metric is NaN across the entire eval set, not just per-row. (aggregate_results.py:69)
+
+--------------------------------------------------------------------------------
+Phase 7 — Statistical Testing (statistical_test.py)
+--------------------------------------------------------------------------------
+
+statistical_test.py
+[ ] [MUST] [PENDING] Add docstring to `compute_confidence_curves` explaining the `grid` parameter and expected shape. (statistical_test.py:367)
+[ ] [MUST] [PENDING] Ensure `run_page_trend_test` handles missing treatments gracefully rather than raising `KeyError`. (statistical_test.py:391)
+[ ] [SHOULD] [PENDING] Add `--parallel` flag for Nemenyi post-hoc to speed up large pairwise matrices on HPC. (statistical_test.py:289)
+[ ] [SHOULD] [PENDING] Consider adding `scipy.stats` version to `stats_meta.json` for full reproducibility. (statistical_test
+
+--------------------------------------------------------------------------------
+ Phase 8 - Select Best Algorithm (select_best.py)
+--------------------------------------------------------------------------------
+
+select_best.py
+[ ]  [MUST] [PENDING] Implement canonical Pareto-front selection: Replace the current win-counting approach with a true Pareto dominance check on the primary and selected secondary metrics defined in config.yaml. (select_best.py:36–66)
+[ ]  [MUST] [PENDING] Add configuration-driven metrics: Read pareto_metrics and pareto_tiebreakers from config.yaml instead of hardcoding METRICS/TIEBREAKERS. (select_best.py:8–9)
+[ ]  [MUST] [PENDING] Validate input columns before selection: Ensure seed_summary contains the expected *_mean columns (e.g., avg_waiting_mean) referenced by the tie-breaker logic. (select_best.py:113)
+[ ]  [MUST] [PENDING] Handle tied-candidates robustly: If all tie-breakers fail to break a tie, log a warning and return the lexicographically first candidate instead of silently picking. (select_best.py:65–66)
+[ ]  [SHOULD] [PENDING] Add CLI argument for config path: Allow --config to point to config.yaml so the script can read pareto_metrics/pareto_tiebreakers at runtime. (select_best.py:68)
+[ ]  [SHOULD] [PENDING] Write rationale more explicitly: In best_algorithm.json, include the full Pareto front list and why the winner was chosen (not just a string). (select_best.py:115–128)
+
+--------------------------------------------------------------------------------
+ Phase 9 - Visualise Results (visualise.py)
+--------------------------------------------------------------------------------
+
+visualise.py
+[ ]  [MUST] [PENDING] Align CLI with Snakefile invocation: The Snakefile calls visualise.py --mode results --trace-name ..., but --mode only accepts "results"; either support multiple modes or remove --mode to keep CLI lean. (visualise.py:62–68, Snakefile:395)
+[ ]  [MUST] [PENDING] Handle missing data files gracefully: load_pipeline_data will raise FileNotFoundError if any expected CSV is missing; add checks and informative error messages. (visualise.py:107–115)
+[ ]  [MUST] [PENDING] Ensure cd_diagram_input.csv schema matches draw_cd_diagrams: Verify that cd_diagram_input.csv contains metric_name, treatment_id, and avg_rank columns before calling draw_cd_diagrams. (visualise.py:153, stats output contract)
+[ ]  [MUST] [PENDING] Fix confidence_curves.csv empty handling: If no significant pairs exist, confidence_curves.csv is empty; draw_confidence_curves returns early but logs should reflect this for debugging. (visualise.py:191–198)
+[ ]  [SHOULD] [PENDING] Add --help formatting for mode-specific args: Since --mode is required/only choice, ensure the help text explains why --trace-name is mandatory and how paths are templated. (visualise.py:59–101)
+[ ]  [SHOULD] [PENDING] Support --alpha override for CD diagrams: Currently hardcoded to 0.05; allow matching the config.yaml alpha for consistency. (visualise.py:153)
+[ ]  [SHOULD] [PENDING] Ensure deterministic file naming: save_figure uses stem directly; ensure no characters in treatment_id break file paths (e.g., / or spaces). (visualise.py:117–122)
+[ ]  [NICE] [PENDING] Add progress logging for long runs: Print which plot/table is being generated to help debugging on cluster runs. (visualise.py:392)

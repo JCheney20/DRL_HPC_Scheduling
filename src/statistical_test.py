@@ -52,7 +52,7 @@ import pandas as pd
 from scipy import stats
 import scikit_posthocs as sp
 
-from utils import (
+from src.utils import (
     ALGORITHMS,
     TRAD_ALGORITHMS,
     SEED_SUMMARY_REQUIRED_IDS,

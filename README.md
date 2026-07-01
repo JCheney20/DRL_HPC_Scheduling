@@ -1,97 +1,115 @@
-# DRL Scheduler Statistical Testbed
+# HPCsim: A Simulation Framework for HPC Scheduling Research
 
-This repository is a reproducible statistical testing environment for deep reinforcement learning (DRL) job schedulers in heterogeneous HPC settings. It provides an end-to-end pipeline to train, evaluate, aggregate, and statistically compare six DRL algorithms (PPO, A2C, DQN) and their maskable variants, with time-aware data splits and a non-parametric analysis suite.
+**HPCsim** is a lightweight, trace-driven simulation framework designed for exploring job scheduling strategies in high-performance computing (HPC) environments. It enables rapid evaluation of selector–allocator combinations, supports both heuristic and learning-based policies, and captures detailed system metrics such as job waiting time, bounded slowdown, turnaround time, and multi-level resource utilization (CPU, GPU, memory).
 
-The implementation is Nix-first. For cluster execution, the same environment is intended to be containerized with Apptainer (see `docs/workflow_hpc.md`).
+---
 
-## Highlights
+## Features
 
-- single repo for training, evaluation, aggregation, and statistics
-- time-aware split policy with holdout guardrails
-- Snakemake orchestration with smoke and full runs
-- reproducibility via Nix (pins Python + dependencies)
-- structured outputs with metadata sidecars for audit trails
+- 🧠 **Flexible Scheduling**: Supports heuristic, rule-based, and RL-based job selectors and resource allocators.
+- 📊 **Detailed Metrics**: Tracks system-level and user-centric metrics (e.g., waiting time, slowdown, utilization).
+- 🧪 **Trace-Driven**: Uses real HPC workload traces (e.g., Slurm) for realistic simulation behavior.
+- ⚙️ **Modular Design**: Clean separation of components (scheduler, cluster, queue, evaluator).
+- 📉 **Visualization**: Outputs data suitable for heatmaps, trend plots, and comparative analysis.
 
-## Quickstart (Nix)
+---
 
-```bash
-cd Project_Github
-nix develop
-just dry_run_smoke
+## Example Use
+
+```python
+from hpcsim import HPCsim
+
+env = HPCsim(
+    scheduler='UNICEP',
+    allocator='topology_aware',
+    backfill_enable=True,
+    topology_file='topology/deeplearn_topology.txt',
+    node_file='topology/nodes.csv',
+    trace_file='deeplearn_job.csv',
+    random_job=False,
+    window_size=100,
+    tail_size=10
+)
+
+env.run()
+print("Average Waiting Time:", env.evaluator.waiting_time())
+print("Bounded Slowdown:", env.evaluator.bounded_slowdown())
+print("Utilization:", env.utilization())
 ```
 
-## Key Commands
+## Job Trace Data Format
 
-Snakemake targets (via just):
+HPCsim uses job trace files derived from Slurm accounting logs to simulate real workload behavior. Each row in the trace file represents a job and includes detailed fields about resource requests, allocation, timing, and job state. The format is tab-separated. A brief description of key fields is provided below:
 
-```bash
-just dry_run_smoke
-just run_smoke
-just run_full
-just run_full TRACE=deep_learn
-```
+| **Field**         | **Description** |
+|-------------------|-----------------|
+| `JobID`           | Unique identifier for the job. |
+| `UID`, `GID`      | User and group IDs associated with the job. |
+| `Account`         | Account name or project under which the job was submitted. |
+| `AllocCPUS`       | Number of CPU cores allocated to the job. |
+| `AllocNodes`      | Number of compute nodes allocated. |
+| `Allgpu`          | Number of GPUs allocated. |
+| `Allmem`          | Total memory allocated (e.g., `100G`). |
+| `ReqCPUS`         | Number of CPU cores requested. |
+| `ReqNodes`        | Number of nodes requested. |
+| `Reqgpu`          | Number of GPUs requested (if specified). |
+| `ReqMem`          | Memory requested by the job. |
+| `TimelimitRaw`    | Job time limit in seconds. |
+| `AdminComment`    | Optional administrator comments, such as system hints. |
+| `Constraints`     | Hardware or system constraints specified (e.g., GPU model). |
+| `CPUTimeRAW`      | Total raw CPU time consumed by the job. |
+| `ElapsedRaw`      | Actual wall-clock duration of the job. |
+| `Eligible`        | Timestamp when the job became eligible to run. |
+| `Submit`          | Job submission timestamp. |
+| `Start`           | Job start time. |
+| `End`             | Job end time. |
+| `State`           | Final job state (e.g., `COMPLETED`, `FAILED`, `TIMEOUT`). |
+| `NodeList`        | Names of nodes used for job execution. |
+| `Partition`       | Slurm partition the job was submitted to. |
+| `Reserved`        | Time reserved but not used for execution. |
+| `QOS`, `QOSRAW`   | Quality-of-service class and raw value. |
+| `Reason`          | Scheduler reason for delay or hold (e.g., `Resources`). |
+| `difference`      | Custom field (e.g., delay or scheduling discrepancy tracking). |
 
-Direct script entrypoints:
+> ℹ️ For any unclear fields, refer to the [Slurm accounting documentation](https://slurm.schedmd.com/accounting.html). HPCsim may also preprocess or extend fields (e.g., normalize memory or timestamps) to suit simulation needs.
 
-```bash
-python src/make_split.py --source physical_job --out-dir data/splits/
-python src/train_agents.py --algo maskable_a2c --trace data/splits/physical_job_dev70.tsv --seed 123456 --save_interval 1000 --total_saving 1
-python src/evaluate_agents.py --manifest logs/run_log.csv --output-dir result/physical_job/eval_runs
-python src/aggregate_results.py --manifest logs/run_log.csv --eval-root result/physical_job/eval_runs/runs --output-dir result/physical_job/aggregate
-python src/statistical_test.py --input result/physical_job/aggregate/seed_summary.csv --output-dir result/physical_job/stats
-```
+## Node Configuration Format
 
-## Project Layout
+HPCsim uses a node configuration file to describe the compute nodes available in each partition. This file is typically a CSV where each row corresponds to a unique node or node type. It defines the node's hardware resources and attributes relevant to scheduling and allocation decisions.
 
-```
-Project_Github/
-├── src/                 # pipeline scripts + HPCsim + custom maskable algorithms
-├── docs/                # methodology, workflow, and reproducibility docs
-├── data/                # traces, topologies, splits (not committed)
-└── presentations/       # presentation artefacts
-```
+| **Field**     | **Description** |
+|---------------|-----------------|
+| `Features`    | CPU features or labels (e.g., architecture extensions such as `avx512`). |
+| `core`        | Number of CPU cores available on the node. |
+| `memory`      | Total memory (in MB) available on the node. |
+| `node_type`   | Unique node identifier (e.g., hostname or alias). |
+| `config`      | Optional CPU configuration descriptor (e.g., socket/core/thread like `4:18:1`). |
+| `gpu`         | GPU model or specification if available (e.g., `v100`). `(null)` if no GPU. |
+| `partition`   | Partition to which the node belongs (e.g., `physical`, `deeplearn`). |
+| `gpu_number`  | Number of GPUs installed on the node. |
 
-## Results (Coming Soon)
+> 📌 This configuration enables topology-aware and resource-aware allocation strategies. Nodes can be grouped or filtered by features, GPU presence, or partition membership as required by different scheduling experiments.
 
-- primary metrics summary table (avg_waiting, avg_slowdown)
-- secondary metrics table (turnaround, utilization)
-- CD diagram inputs and plots
-- seed-level summary and statistical outputs
+## Topology Data Format
 
-When results land, this section will link to the generated artefacts and the evidence map in `docs/submission2_evidence_map.md`.
+HPCsim uses a topology configuration file to model the hierarchical network structure of HPC clusters. This information is essential for simulating topology-aware scheduling and allocation decisions. The topology file is a plain-text file with switch-level and node-level connections specified line by line.
 
-## What This Repo Is (and Is Not)
+Each entry defines either a high-level switch-to-switch connection or a low-level switch-to-node mapping.
 
-- This repo is a reproducible statistical testing environment for DRL job schedulers.
-- It is not a production scheduler or a benchmark leaderboard.
-- It focuses on transparent pipelines, fixed splits, and auditable statistics.
+### Example Format
 
-## Data Access
+SwitchName=sp-266-p16-1 Level=1 LinkSpeed=1 Switches=le-266-q11-1-res,le-266-q14-1-res,le-266-r17-1-res,le-266-r19-1-res
 
-The HPCSim environment and Slurm traces originate from Wang et al. The canonical source is the HPCSim repository and dataset release:
+SwitchName=le-266-q11-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[053-066] SwitchName=le-266-q14-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[087-125] SwitchName=le-266-r17-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[001-020] SwitchName=le-266-r19-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[021-029],spartan-bm[039-043]
 
-- https://gitlab.unimelb.edu.au/lingfeiw/herasched
+### Field Descriptions
 
-Use this link for trace acquisition details and upstream documentation.
+| **Field**     | **Description** |
+|---------------|-----------------|
+| `SwitchName`  | Name or identifier of the switch. |
+| `Level`       | Topology level (e.g., core switch = 1, edge switch = 0). |
+| `LinkSpeed`   | Speed of the network links (used for simulation scaling). |
+| `Switches`    | (Optional) List of connected child switches (used in higher-level switches). |
+| `Nodes`       | (Optional) List or range of node hostnames directly connected to the switch. |
 
-## Citations
-
-If you use this repository, cite:
-
-- Wang et al. for the Slurm traces and HPCSim environment (bib key: `Wang2025_1`).
-- Stable-Baselines3 for PPO/A2C/DQN implementations (bib key: `stable-baselines3`).
-
-Citation entries live in `Submmisions/bibliography.bib`.
-
-## Documentation Index
-
-- `docs/methodology_protocol.md`
-- `docs/data_split_policy.md`
-- `docs/workflow_local.md`
-- `docs/workflow_hpc.md`
-- `docs/snakemake_pipeline.md`
-- `docs/reproducibility_checklist.md`
-
-## Contact
-
-Justin M. Cheney — 4323819@myuwc.ac.za
+> 🔗 Switch-to-switch and switch-to-node mappings allow HPCsim to simulate realistic network distances and bottlenecks in topology-aware scheduling experiments.

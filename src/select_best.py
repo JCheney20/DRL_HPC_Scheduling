@@ -29,7 +29,7 @@ import networkx as nx
 import pandas as pd
 from paretoset import paretoset
 
-from utils import METRIC_DIRECTION, write_json
+from src.utils import METRIC_DIRECTION, write_json
 
 PRIMARY_METRICS = ["avg_waiting", "avg_slowdown"]
 SECONDARY_METRICS = ["max_waiting", "max_slowdown", "avg_turnaround", "cpu_utilization"]
@@ -192,9 +192,15 @@ def break_ties_with_cis(
 def load_page_trend(page_trend_path: Path) -> dict | None:
     if not page_trend_path.exists():
         return None
-    df = pd.read_csv(page_trend_path)
+    
+    try:
+        df = pd.read_csv(page_trend_path)
+    except pd.errors.EmptyDataError:
+        return None  # Treat an empty file the same as a missing/empty dataframe
+
     if df.empty:
         return None
+        
     rows = df[["metric_name", "p_value"]].assign(significant=lambda d: d["p_value"] < ALPHA)
     return {"available": True, "rows": rows.to_dict("records"), "any_significant": bool(rows["significant"].any())}
 
@@ -208,14 +214,24 @@ def main() -> None:
     args = parse_args()
     alpha = float(args.alpha)
 
-    nemenyi = pd.read_csv(args.nemenyi)
-    seed_summary = pd.read_csv(args.seed_summary)
+    try:
+        nemenyi = pd.read_csv(args.nemenyi)
+    except pd.errors.EmptyDataError:
+        nemenyi = pd.DataFrame(columns=["metric_name", "p_value", "treatment_a", "treatment_b"])
 
     ci_df = None
     if args.ci and Path(args.ci).exists():
-        ci_df = pd.read_csv(args.ci)
+        try:
+            ci_df = pd.read_csv(args.ci)
+        except pd.errors.EmptyDataError:
+            ci_df = pd.DataFrame()
     elif args.ci:
         print(f"[WARN] CI path {args.ci} not found; tie-breaking will be less powerful", file=sys.stderr)
+
+    seed_summary = pd.read_csv(args.seed_summary)
+
+    rename_map = {col: col[:-5] for col in seed_summary.columns if col.endswith("_mean")}
+    seed_summary = seed_summary.rename(columns=rename_map)
 
     page_trend_result = load_page_trend(Path(args.page_trend)) if args.page_trend else None
 

@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils import EVAL_REQUIRED, CORE_METRICS, validate_finite_numeric, validate_required_columns, write_csv
+from src.utils import EVAL_REQUIRED, CORE_METRICS, validate_finite_numeric, validate_required_columns, write_csv
 
 
 def parse_args() -> argparse.Namespace:

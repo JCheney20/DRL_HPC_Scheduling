@@ -6,24 +6,17 @@
 #   Smoke test: snakemake --configfile config.smoke.yaml
 # =============================================================================
 
-# --- Slurm ---------------------------------------------------------------
-executor: slurm
-use-singularity: true
-singularity-args: "--bind $PWD:/workspace --bind data:/workspace/data"
-latency-wait: 60
-jobs: 100
-rerun-incomplete: true
-default-resources:
-  mem_mb: 8000
-  runtime: 120
-  slurm_partition: cpu
-
+# --- Execution -----------------------------------------------------------
+# NOTE: Snakemake runner settings (executor, jobs, use-singularity,
+# apptainer-args, latency-wait, rerun-incomplete, default-resources) live in
+# profiles/slurm/config.yaml — the single source of truth for SLURM execution.
+# This file holds workflow parameters only. Run with --profile profiles/slurm.
 
 # --- Container ---------------------------------------------------------------
 container: "DRL_env.sif"
 
 # --- Trace -------------------------------------------------------------------
-trace_name: "physical_job"         # "physical_job" | "deep_learn"
+trace_name: "physical_job"         # "physical_job" | "deeplearn_job" (must match data/<trace_name>.csv)
 
 # --- Seeds -------------------------------------------------------------------
 seeds: [210169, 250564, 20603, 170797, 21095]   # 5 seeds for production
@@ -56,13 +49,17 @@ allocators:
 
 # --- Training hyperparameters ------------------------------------------------
 save_interval: 100000
-total_saving: 100                  # total timesteps = save_interval * total_saving
+total_saving: 30                   # total timesteps = save_interval * total_saving = 3M steps (~2.8 h at n_envs=20)
 window_size: 512
 tail_size: 64
 buffer_size: 1_000_000
+n_envs: 20                         # SubprocVecEnv workers for PPO/A2C (DQN stays single-env); 20 workers + 1 main = 21 of 24 cores
+batch_size: 2048                   # minibatch size: PPO (buffer=n_envs*n_steps=40960, 20 batches/epoch × 5 epochs=100 steps); DQN (replay sample size)
+n_epochs: 5                        # PPO optimisation epochs per rollout (SB3 default 10; halved to cut update time)
+learning_rate: "linear_3e-4"       # linear decay 3e-4 -> 0 over training; keeps fast early learning, tames late clip_fraction climb. Use "3e-4" for constant.
 
 # --- Topology ----------------------------------------------------------------
-topology_file: "physical_topology.txt" # "physical" | "deep_learn"
+topology_file: "physical_topology.txt" # "physical_topology.txt" | "deeplearn_topology.txt" (switch with trace_name)
 node_file: "nodes.csv"
 
 # --- Statistical test parameters ---------------------------------------------

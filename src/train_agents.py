@@ -27,12 +27,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 from stable_baselines3.common.utils import set_random_seed
 from torch import nn
 
-from checkpoint import SelectorCheckpointCallback
-from HPCsim.HPCsim import HPCsim
-from utils import (
+from src.checkpoint import SelectorCheckpointCallback
+from src.HPCsim.HPCsim import HPCsim
+from src.utils import (
     ALGORITHMS,
     ArgumentParserWithDefaults,
     build_train_metadata,
@@ -49,6 +50,20 @@ from utils import (
 # ---------------------------------------------------------------------------
 
 DEFAULT_HIDDEN_LAYER = [4096, 2048, 1024]
+
+
+def configure_compute() -> None:
+    """Speed knobs that do not affect results.
+
+    - TF32 lets the L4's tensor cores run matmuls ~1.5-2x faster than FP32 at
+      negligible precision cost — meaningful for the large policy/value nets.
+    - Pinning torch to a single intra-op thread in the main process stops it
+      contending with the SubprocVecEnv workers for the node's cores. Worker
+      numpy/BLAS threading is capped via OMP_NUM_THREADS in the Snakefile.
+    """
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_num_threads(1)
 
 ACTIVATION_MAP: dict[str, Any] = {
     "relu": nn.ReLU,
@@ -198,6 +213,42 @@ def parse_args() -> argparse.Namespace:
         help="Split ID to use (e.g., 'physical_job_r70'). Optional; auto-detects if only one split exists.",
         type=str,
     )
+    parser.add_argument(
+        "--n-envs",
+        default=1,
+        dest="n_envs",
+        metavar="N_ENVS",
+        help="Number of parallel SubprocVecEnv workers (PPO/A2C only; DQN uses 1 regardless).",
+        type=int,
+    )
+    parser.add_argument(
+        "--batch-size",
+        default=2048,
+        dest="batch_size",
+        metavar="BATCH_SIZE",
+        help="Minibatch size for gradient updates (PPO/DQN only; A2C uses full rollout).",
+        type=int,
+    )
+    parser.add_argument(
+        "--n-epochs",
+        default=5,
+        dest="n_epochs",
+        metavar="N_EPOCHS",
+        help="Number of optimisation epochs per rollout (PPO only).",
+        type=int,
+    )
+    parser.add_argument(
+        "--learning-rate",
+        default="3e-4",
+        dest="learning_rate",
+        metavar="LEARNING_RATE",
+        help=(
+            "Optimiser learning rate. A bare float (e.g. '3e-4') is a constant "
+            "rate; 'linear_<start>' (e.g. 'linear_3e-4') linearly decays from "
+            "<start> to 0 over training. Applies to PPO/A2C/DQN."
+        ),
+        type=str,
+    )
 
     args = parser.parse_args()
     args.split_id = Path(args.split_id).stem if "." in args.split_id else args.split_id
@@ -226,17 +277,47 @@ def build_training_env(
     window_size: int,
     tail_size: int,
     seed: int | None,
+    n_envs: int = 1,
+    algorithm: str = "",
 ) -> HPCsim:
-    return HPCsim(
-        topology_file=f"data/topology/{topology_file}",
-        allocator="best_fit",
-        node_file=f"data/topology/{node_file}",
-        trace_file=f"data/{trace_file}",
-        random_job=False,
-        window_size=window_size,
-        tail_size=tail_size,
-        seed=seed,
-    )
+    def _make_env(rank: int = 0):
+        env_seed = (seed + rank) if seed is not None else None
+        return HPCsim(
+            topology_file=f"data/topology/{topology_file}",
+            allocator="best_fit",
+            node_file=f"data/topology/{node_file}",
+            trace_file=f"{trace_file}",
+            random_job=False,
+            window_size=window_size,
+            tail_size=tail_size,
+            seed=env_seed,
+        )
+
+    use_vec = n_envs > 1 and "dqn" not in algorithm.lower()
+    if use_vec:
+        from stable_baselines3.common.vec_env import SubprocVecEnv
+        return SubprocVecEnv([lambda r=i: _make_env(r) for i in range(n_envs)])
+    return _make_env()
+
+
+def parse_learning_rate(spec: str) -> float | Any:
+    """Parse an LR spec into a constant float or an SB3 schedule callable.
+
+    - "3e-4"        -> constant 3e-4
+    - "linear_3e-4" -> linear decay from 3e-4 to 0 over training
+
+    SB3 calls a schedule with ``progress_remaining`` (1.0 at the start, 0.0 at
+    the end), so ``progress_remaining * initial`` yields the linear anneal.
+    """
+    spec = spec.strip()
+    if spec.lower().startswith("linear_"):
+        initial = float(spec.split("_", 1)[1])
+
+        def schedule(progress_remaining: float) -> float:
+            return progress_remaining * initial
+
+        return schedule
+    return float(spec)
 
 
 def build_model(
@@ -247,6 +328,9 @@ def build_model(
     gamma: float,
     seed: int | None,
     buffer_size: int,
+    batch_size: int,
+    n_epochs: int,
+    learning_rate: float | Any,
     logdir: str,
 ) -> Any:
     Path(logdir).mkdir(parents=True, exist_ok=True)
@@ -259,6 +343,7 @@ def build_model(
     model_kwargs: dict[str, Any] = {
         "policy_kwargs": policy_kwargs,
         "gamma": gamma,
+        "learning_rate": learning_rate,
         "seed": seed,
         "verbose": 1,
         "tensorboard_log": logdir,
@@ -266,6 +351,14 @@ def build_model(
 
     if "dqn" in algorithm.lower():
         model_kwargs["buffer_size"] = buffer_size
+
+    # A2C uses the full rollout as one update; batch_size is a PPO/DQN concept
+    if "ppo" in algorithm.lower() or "dqn" in algorithm.lower():
+        model_kwargs["batch_size"] = batch_size
+
+    # n_epochs is a PPO-only knob (A2C/DQN have no concept of rollout re-passes)
+    if "ppo" in algorithm.lower():
+        model_kwargs["n_epochs"] = n_epochs
 
     return algo_class("MultiInputPolicy", env, **model_kwargs)
 
@@ -364,6 +457,7 @@ def train_and_log(
 
 
 def main() -> None:
+    configure_compute()
     args = parse_args()
     try:
         validate_args(args)
@@ -388,6 +482,8 @@ def main() -> None:
         window_size=args.window_size,
         tail_size=args.tail_size,
         seed=args.seed,
+        n_envs=args.n_envs,
+        algorithm=args.algorithm,
     )
 
     model = build_model(
@@ -398,6 +494,9 @@ def main() -> None:
         gamma=args.gamma,
         seed=args.seed,
         buffer_size=args.buffer_size,
+        batch_size=args.batch_size,
+        n_epochs=args.n_epochs,
+        learning_rate=parse_learning_rate(args.learning_rate),
         logdir="logs",
     )
 
@@ -408,6 +507,9 @@ def main() -> None:
         "hidden_layer": args.hidden_layer,
         "activation_fn": args.activation_fn,
         "buffer_size": args.buffer_size,
+        "batch_size": args.batch_size,
+        "n_epochs": args.n_epochs,
+        "learning_rate": args.learning_rate,
         "save_interval": args.save_interval,
         "total_saving": args.total_saving,
     }

@@ -28,8 +28,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from HPCsim.HPCsim import HPCsim
-from utils import PARTITION_CONFIGS, write_csv, write_json, write_manifest_entry
+from src.HPCsim.HPCsim import HPCsim
+from src.utils import PARTITION_CONFIGS, write_csv, write_json, write_manifest_entry
 
 
 def run_one(row: dict, run_id: str, partition: str, result_dir: Path) -> None:
@@ -149,7 +149,7 @@ def main() -> None:
     treatment_id = f"{args.algorithm}__mask_false"
     trace = f"data/splits/{args.split_id}.tsv"
     manifest_path = Path(args.manifest_path)
-    result_path = Path(args.result_dir) / args.partition
+    result_path = Path(args.result_dir)
 
     if manifest_path.exists():
         existing = pd.read_csv(manifest_path)

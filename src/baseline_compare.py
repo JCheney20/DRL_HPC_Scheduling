@@ -39,7 +39,7 @@ from pathlib import Path
 import pandas as pd
 from scipy import stats
 
-from utils import METRIC_DIRECTION, write_csv
+from src.utils import METRIC_DIRECTION, write_csv
 
 PRIMARY_METRICS = ["avg_waiting", "avg_slowdown"]
 
@@ -50,10 +50,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--best-algorithm", required=True, type=str, help="Path to best_algorithm.json")
     parser.add_argument("--seed-summary", required=True, type=str, help="Path to seed_summary.csv")
+    parser.add_argument("--algorithm-summary", required=True, type=str, help="Path to algorithm_summary.csv")
     parser.add_argument("--baseline-summary", required=True, type=str, help="Path to baseline_summary.csv")
     parser.add_argument("--metrics", default=PRIMARY_METRICS, nargs="+", type=str)
     parser.add_argument("--alpha", default=0.05, type=float)
     parser.add_argument("--output", required=True, type=str)
+    parser.add_argument("--descriptive-output", required=True, type=str)
     return parser.parse_args()
 
 
@@ -136,6 +138,14 @@ def main() -> None:
     write_csv(out_df, Path(args.output))
     print(f"[OK] {len(out_df)} comparison(s) -> wrote {args.output}")
 
+    alg_summary = pd.read_csv(args.algorithm_summary)
+    
+    combined_df = pd.concat([alg_summary, baseline_summary], ignore_index=True)
+    
+    combined_df = combined_df.sort_values("treatment_id")
+    
+    write_csv(combined_df, Path(args.descriptive_output))
+    print(f"[OK] Wrote master descriptive table -> {args.descriptive_output}")
 
 if __name__ == "__main__":
     main()

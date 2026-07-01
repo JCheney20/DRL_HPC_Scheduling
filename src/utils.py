@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -17,8 +18,8 @@ import pandas as pd
 from stable_baselines3 import PPO, DQN, A2C
 from sb3_contrib.ppo_mask import MaskablePPO
 
-from a2c_mask import MaskableA2C
-from dqn_mask import MaskableDQN
+from src.a2c_mask import MaskableA2C
+from src.dqn_mask import MaskableDQN
 
 
 # ---------------------------------------------------------------------------
@@ -67,38 +68,6 @@ class EvalResult:
     cpu_utilization: float
     gpu_utilization: float
     timestamp_utc: str
-
-
-@dataclass(frozen=True)
-class TrainRun:
-    run_id: str
-    treatment_id: str
-    algorithm: str
-    use_masking: bool
-    window_size: int
-    tail_size: int
-    seed: int | None
-    split_id: str
-    model_path: str
-    trace_file: str
-    topology_file: str
-    node_file: str
-
-    def to_manifest_row(self) -> dict[str, Any]:
-        return {
-            "run_id": self.run_id,
-            "treatment_id": self.treatment_id,
-            "algorithm": self.algorithm,
-            "use_masking": str(self.use_masking).lower(),
-            "window_size": int(self.window_size),
-            "tail_size": int(self.tail_size),
-            "seed": "" if self.seed is None else str(self.seed),
-            "split_id": self.split_id,
-            "model_path": self.model_path,
-            "trace_file": self.trace_file,
-            "topology_file": self.topology_file,
-            "node_file": self.node_file,
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -206,16 +175,6 @@ class ArgumentParserWithDefaults(argparse.ArgumentParser):
             if help is not None:
                 kwargs["help"] += f" (Default: {default})"
         super().add_argument(*args, **kwargs)
-
-
-def add_standard_output_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument(
-        "--output-dir",
-        default="result/default",
-        type=str,
-        help="Directory to write outputs (will create if missing)",
-    )
-    return parser
 
 
 def add_standard_debug_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -401,7 +360,15 @@ def validate_not_holdout(trace_file: str, context: str = "", raise_error: bool =
 # ---------------------------------------------------------------------------
 
 def git_hash() -> str | None:
-    """Return the current git commit hash, or None if not in a git repo."""
+    """Return the current git commit hash, or None if unavailable.
+
+    Prefers the GIT_COMMIT env var (injected by the Snakefile from a login-node
+    capture) so the hash is recorded even when git cannot run inside the
+    Apptainer runtime. Falls back to an in-process git call otherwise.
+    """
+    env_commit = os.environ.get("GIT_COMMIT")
+    if env_commit:
+        return env_commit
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL

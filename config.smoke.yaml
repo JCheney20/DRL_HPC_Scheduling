@@ -1,62 +1,67 @@
 # =============================================================================
 # config.smoke.yaml — Smoke Test Configuration
 # =============================================================================
-# Minimal config for fast end-to-end pipeline validation.
-# Usage: snakemake --configfile config.smoke.yaml
+# Fast end-to-end validation: small windows, tiny timestep counts, 2 seeds,
+# 2 algorithms, 2 baselines. Goal is to exercise every pipeline stage and
+# every file handoff, not to produce statistically meaningful results.
+# Usage: snakemake --configfile config.smoke.yaml --cores 4
 # =============================================================================
 
-# --- Container ---------------------------------------------------------------
+# --- Container (required by Snakefile, only matters if --use-singularity) ---
 container: "DRL_env.sif"
 
 # --- Trace -------------------------------------------------------------------
-trace_name: "physical_job"
+trace_name: "physical_job"          # must be "physical_job" or "deeplearn_job"
 
 # --- Seeds -------------------------------------------------------------------
-seeds: [42, 123, 456]                   # 2 seeds sufficient for smoke
+seeds: [1, 2]                       # 2 seeds: enough to exercise the seed-parallel
+                                     # DAG branches without a full 5/10-seed run
 
-# --- Algorithms --------------------------------------------------------------
+# --- Algorithms (REQUIRED key, even if list is short) ------------------------
 algorithms:
-  - "ppo"
-  # - "a2c"
-  # - "dqn"
-  # - "maskable_ppo"
-  - "maskable_a2c"
-  - "maskable_dqn"
+  - "maskable_a2c"                  # cheap, no replay buffer
+  - "maskable_dqn"                  # exercises the buffer_size path
 
-# --- Baseline -----------------------------------------------------------------
+# --- Baseline (REQUIRED keys: trad_algorithms, baseline_only) ----------------
+baseline_only: false
 trad_algorithms:
-  # - "fcfs"
+  - "fcfs"
   - "lcfs"
-  # - "sjf"
-  # - "wfp3"
-  # - "unicep"
-  # - "f_1"
-  # - "f_2"
 
-baseline_only: False
-
-# -- Allocator -----------------------------------------------------------------
-allocators:
-  - "best_fit"
-  # - "topology_aware"
-  # - "first_available
-
-# --- Training hyperparameters ------------------------------------------------
-save_interval: 1000
-total_saving: 1                    # total timesteps = 500 * 2 = 1000
-window_size: 512
-tail_size: 64
-buffer_size: 512
+# --- Training hyperparameters (REQUIRED: save_interval, total_saving) -------
+save_interval: 100                  # smoke: small, so checkpoints actually fire
+total_saving: 2                     # total_timesteps = 100 * 2 = 200
+window_size: 16                     # smoke: small observation window
+tail_size: 4
+buffer_size: 1000                   # smoke: tiny replay buffer for maskable_dqn
+n_envs: 1                           # smoke: single env to keep resource requirements minimal
+batch_size: 64                      # smoke: small buffer (100 steps × 1 env), batch must be ≤ buffer
+n_epochs: 3                          # smoke: few epochs, just exercise the PPO update path
+learning_rate: "3e-4"                # smoke: constant LR; schedule path not worth exercising at 200 steps
 
 # --- Topology ----------------------------------------------------------------
 topology_file: "physical_topology.txt"
 node_file: "nodes.csv"
 
-# --- Statistical test parameters ---------------------------------------------
+# --- Statistical test parameters (REQUIRED: alpha) ---------------------------
 alpha: 0.05
-bootstrap_reps: 100                # reduced for speed
-bootstrap_seed: 42
 
-# --- Evaluation --------------------------------------------------------------
+# --- Evaluation ----------------------------------------------------------
 eval_deterministic: true
-eval_max_steps: 500                # early stop for smoke
+eval_max_steps: 5                   # smoke: cap episode length so eval finishes fast
+
+# --- Pareto Select (REQUIRED keys: pareto_metrics, pareto_tiebreakers) -------
+pareto_metrics:
+  - "avg_waiting"
+  - "avg_slowdown"
+pareto_tiebreakers:
+  - "avg_waiting"
+  - "avg_slowdown"
+
+# --- Visualisation (REQUIRED key, even if all flags are false for smoke) ----
+visualisation:
+  plots_enabled: true
+  tables_enabled: true
+  cd_diagrams: true
+  confidence_curves: true
+  bar_graphs: true

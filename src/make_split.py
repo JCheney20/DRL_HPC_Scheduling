@@ -4,7 +4,7 @@ import json
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from utils import ArgumentParserWithDefaults
+from src.utils import ArgumentParserWithDefaults
 
 def parse_args():
     parser = ArgumentParserWithDefaults(description='Trace Splitter')

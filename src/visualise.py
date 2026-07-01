@@ -25,7 +25,7 @@ from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 import scikit_posthocs as sp
-from utils import TRAD_ALGORITHMS
+from src.utils import TRAD_ALGORITHMS
 
 matplotlib.rcParams.update(
     {
@@ -99,17 +99,24 @@ def parse_args() -> argparse.Namespace:
 
 def load_pipeline_data(stats_dir: Path, aggregate_dir: Path) -> dict[str, pd.DataFrame]:
     """Load all CSVs needed for visualisation and tabulation."""
+    
+    def safe_read(directory: Path, filename: str, expected_cols: list[str]) -> pd.DataFrame:
+            path = directory / filename
+            try:
+                return pd.read_csv(path)
+            except (pd.errors.EmptyDataError, FileNotFoundError):
+                return pd.DataFrame(columns=expected_cols)
+
     return {
-        "cd_input": pd.read_csv(stats_dir / "cd_diagram_input.csv"),
-        "confidence_curves": pd.read_csv(stats_dir / "confidence_curves.csv"),
-        "pairwise_nemenyi": pd.read_csv(stats_dir / "pairwise_nemenyi.csv"),
-        "confidence_intervals": pd.read_csv(stats_dir / "confidence_intervals.csv"),
-        "page_trend": pd.read_csv(stats_dir / "page_trend.csv"),
+        "cd_input": safe_read(stats_dir, "cd_diagram_input.csv", ["metric_name", "treatment_id", "avg_rank"]),
+        "confidence_curves": safe_read(stats_dir, "confidence_curves.csv", ["metric", "treatment_a", "treatment_b", "delta", "p_value"]),
+        "pairwise_nemenyi": safe_read(stats_dir, "pairwise_nemenyi.csv", ["metric_name", "treatment_a", "treatment_b", "p_value"]),
+        "confidence_intervals": safe_read(stats_dir, "confidence_intervals.csv", ["metric_name", "treatment_a", "treatment_b", "ci_low", "ci_high"]),
+        "page_trend": safe_read(stats_dir, "page_trend.csv", ["metric_name", "treatment_order", "trend_direction", "statistic", "p_value", "significant"]),
         "seed_summary": pd.read_csv(aggregate_dir / "seed_summary.csv"),
         "algorithm_summary": pd.read_csv(aggregate_dir / "algorithm_summary.csv"),
         "eval_wide": pd.read_csv(aggregate_dir / "eval_wide.csv"),
     }
-
 
 def load_stats_summary(stats_dir: Path) -> dict:
     with open(stats_dir / "stats_summary.json") as f:

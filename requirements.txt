@@ -1,0 +1,51 @@
+# Python dependencies for pip / Conda users.
+#
+# Derived from flake.nix. Nix (`nix develop`) remains the reproducible source
+# of truth — flake.lock pins exact versions. This list is the portable escape
+# hatch; versions are left unpinned so pip/conda can resolve a consistent set.
+#
+# System tools are NOT installable here — install them separately if needed:
+#   graphviz (DAG export), apptainer/singularity (container runtime).
+
+# --- Core scientific stack ---
+numpy
+pandas
+scipy
+matplotlib
+pillow
+sympy
+networkx
+python-dateutil
+pytz
+tzdata
+
+# --- Reinforcement learning ---
+gymnasium
+torch
+torchvision
+stable-baselines3
+sb3-contrib
+
+# --- Statistics ---
+scikit-posthocs
+paretoset
+
+# --- Logging / TensorBoard ---
+tensorboard
+tensorboard-data-server
+protobuf
+grpcio
+markdown
+
+# --- Serialization / utils ---
+cloudpickle
+filelock
+fsspec
+packaging
+six
+typing-extensions
+
+# --- Workflow engine + SLURM executor ---
+snakemake
+snakemake-executor-plugin-slurm
+snakemake-executor-plugin-slurm-jobstep
