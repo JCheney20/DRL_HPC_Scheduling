@@ -10,16 +10,12 @@ Over the past three decades, supercomputers and their workloads have become incr
 ## Dependencies
 
 Only one of the following is needed to get started — the rest of the environment is installed automatically:
-
-<div align="center">
   
 | Method | Requirement |
 |--------|-------------|
 | **Nix** (recommended) | [Nix](https://nixos.org/download/) with flakes enabled |
 | **Conda** | [Conda](https://docs.conda.io/en/latest/miniconda.html) or Mamba |
 | **pip** | Python ≥ 3.11 |
-  
-</div>
 
 ---
 
@@ -64,8 +60,6 @@ The full workflow is managed by [Snakemake](https://snakemake.readthedocs.io) an
 
 ### Local
 
-<div align="center">
-  
 | Command | Description |
 |---------|-------------|
 | `just dry_run_smoke` | Validate the smoke DAG without running any jobs |
@@ -74,20 +68,14 @@ The full workflow is managed by [Snakemake](https://snakemake.readthedocs.io) an
 | `just clean` | Remove outputs; preserve logs |
 | `just clean_all` | Remove all outputs including logs (full reset) |
 
-</div>
-
 ### Cluster (SLURM)
 
-<div align="center">
-  
 | Command | Description |
 |---------|-------------|
 | `just dry_run_slurm` | Validate the production DAG for cluster submission |
 | `just dry_run_smoke_slurm` | Validate the smoke DAG for cluster submission |
 | `just run_smoke_slurm` | Submit smoke test to SLURM |
 | `just run_full_slurm` | Submit full pipeline to SLURM |
-
-</div>
 
 Run `just help` to see all available targets.
 
