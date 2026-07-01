@@ -1,115 +1,140 @@
-# HPCsim: A Simulation Framework for HPC Scheduling Research
+# Intelligent Job Scheduling for HPC Systems
+### A Statistical Evaluation of Deep Reinforcement Learning Approaches
 
-**HPCsim** is a lightweight, trace-driven simulation framework designed for exploring job scheduling strategies in high-performance computing (HPC) environments. It enables rapid evaluation of selector–allocator combinations, supports both heuristic and learning-based policies, and captures detailed system metrics such as job waiting time, bounded slowdown, turnaround time, and multi-level resource utilization (CPU, GPU, memory).
+**Justin M. Cheney** · University of the Western Cape · 2026
 
----
-
-## Features
-
-- 🧠 **Flexible Scheduling**: Supports heuristic, rule-based, and RL-based job selectors and resource allocators.
-- 📊 **Detailed Metrics**: Tracks system-level and user-centric metrics (e.g., waiting time, slowdown, utilization).
-- 🧪 **Trace-Driven**: Uses real HPC workload traces (e.g., Slurm) for realistic simulation behavior.
-- ⚙️ **Modular Design**: Clean separation of components (scheduler, cluster, queue, evaluator).
-- 📉 **Visualization**: Outputs data suitable for heatmaps, trend plots, and comparative analysis.
+Over the past three decades, supercomputers and their workloads have become increasingly complex. Scheduling systems have evolved from traditional heuristics to Deep Reinforcement Learning (DRL) approaches that adapt policies to specific workloads. Though several studies develop DRL schedulers, no clear consensus exists on the optimal algorithm family. This project trains and evaluates representative algorithms from three DRL families — DQN, PPO, and A2C — with and without action masking, on real heterogeneous Slurm traces (~84k jobs). Statistical testing (Friedman, Nemenyi, Wilcoxon-based confidence intervals) determines whether significant performance differences exist across five industry-standard metrics.
 
 ---
 
-## Example Use
+## Dependencies
 
-```python
-from hpcsim import HPCsim
+Only one of the following is needed to get started — the rest of the environment is installed automatically:
 
-env = HPCsim(
-    scheduler='UNICEP',
-    allocator='topology_aware',
-    backfill_enable=True,
-    topology_file='topology/deeplearn_topology.txt',
-    node_file='topology/nodes.csv',
-    trace_file='deeplearn_job.csv',
-    random_job=False,
-    window_size=100,
-    tail_size=10
-)
+| Method | Requirement |
+|--------|-------------|
+| **Nix** (recommended) | [Nix](https://nixos.org/download/) with flakes enabled |
+| **Conda** | [Conda](https://docs.conda.io/en/latest/miniconda.html) or Mamba |
+| **pip** | Python ≥ 3.11 |
 
-env.run()
-print("Average Waiting Time:", env.evaluator.waiting_time())
-print("Bounded Slowdown:", env.evaluator.bounded_slowdown())
-print("Utilization:", env.utilization())
+---
+
+## Setup
+
+### Nix (recommended)
+
+Nix provides a fully reproducible, content-addressed environment — every dependency including the Python interpreter is pinned via `flake.lock`.
+
+```bash
+# 1. Install Nix (if not already installed)
+sh <(curl -L https://nixos.org/nix/install) --daemon
+
+# 2. Enable flakes (add to ~/.config/nix/nix.conf)
+experimental-features = nix-command flakes
+
+# 3. Enter the development shell
+nix develop
 ```
 
-## Job Trace Data Format
+All subsequent `just` and `python -m src.*` commands should be run inside `nix develop`.
 
-HPCsim uses job trace files derived from Slurm accounting logs to simulate real workload behavior. Each row in the trace file represents a job and includes detailed fields about resource requests, allocation, timing, and job state. The format is tab-separated. A brief description of key fields is provided below:
+### Conda / pip
 
-| **Field**         | **Description** |
-|-------------------|-----------------|
-| `JobID`           | Unique identifier for the job. |
-| `UID`, `GID`      | User and group IDs associated with the job. |
-| `Account`         | Account name or project under which the job was submitted. |
-| `AllocCPUS`       | Number of CPU cores allocated to the job. |
-| `AllocNodes`      | Number of compute nodes allocated. |
-| `Allgpu`          | Number of GPUs allocated. |
-| `Allmem`          | Total memory allocated (e.g., `100G`). |
-| `ReqCPUS`         | Number of CPU cores requested. |
-| `ReqNodes`        | Number of nodes requested. |
-| `Reqgpu`          | Number of GPUs requested (if specified). |
-| `ReqMem`          | Memory requested by the job. |
-| `TimelimitRaw`    | Job time limit in seconds. |
-| `AdminComment`    | Optional administrator comments, such as system hints. |
-| `Constraints`     | Hardware or system constraints specified (e.g., GPU model). |
-| `CPUTimeRAW`      | Total raw CPU time consumed by the job. |
-| `ElapsedRaw`      | Actual wall-clock duration of the job. |
-| `Eligible`        | Timestamp when the job became eligible to run. |
-| `Submit`          | Job submission timestamp. |
-| `Start`           | Job start time. |
-| `End`             | Job end time. |
-| `State`           | Final job state (e.g., `COMPLETED`, `FAILED`, `TIMEOUT`). |
-| `NodeList`        | Names of nodes used for job execution. |
-| `Partition`       | Slurm partition the job was submitted to. |
-| `Reserved`        | Time reserved but not used for execution. |
-| `QOS`, `QOSRAW`   | Quality-of-service class and raw value. |
-| `Reason`          | Scheduler reason for delay or hold (e.g., `Resources`). |
-| `difference`      | Custom field (e.g., delay or scheduling discrepancy tracking). |
+An unpinned `requirements.txt` derived from `flake.nix` is provided for portability:
 
-> ℹ️ For any unclear fields, refer to the [Slurm accounting documentation](https://slurm.schedmd.com/accounting.html). HPCsim may also preprocess or extend fields (e.g., normalize memory or timestamps) to suit simulation needs.
+```bash
+# pip
+pip install -r requirements.txt
 
-## Node Configuration Format
+# Conda
+conda install --file requirements.txt
+```
 
-HPCsim uses a node configuration file to describe the compute nodes available in each partition. This file is typically a CSV where each row corresponds to a unique node or node type. It defines the node's hardware resources and attributes relevant to scheduling and allocation decisions.
+> Note: GPU support (CUDA) requires a compatible PyTorch installation for your platform. Under Nix, CUDA is handled automatically by the flake.
 
-| **Field**     | **Description** |
-|---------------|-----------------|
-| `Features`    | CPU features or labels (e.g., architecture extensions such as `avx512`). |
-| `core`        | Number of CPU cores available on the node. |
-| `memory`      | Total memory (in MB) available on the node. |
-| `node_type`   | Unique node identifier (e.g., hostname or alias). |
-| `config`      | Optional CPU configuration descriptor (e.g., socket/core/thread like `4:18:1`). |
-| `gpu`         | GPU model or specification if available (e.g., `v100`). `(null)` if no GPU. |
-| `partition`   | Partition to which the node belongs (e.g., `physical`, `deeplearn`). |
-| `gpu_number`  | Number of GPUs installed on the node. |
+---
 
-> 📌 This configuration enables topology-aware and resource-aware allocation strategies. Nodes can be grouped or filtered by features, GPU presence, or partition membership as required by different scheduling experiments.
+## Running the Pipeline
 
-## Topology Data Format
+The full workflow is managed by [Snakemake](https://snakemake.readthedocs.io) and wrapped in a `justfile` for convenience. See [`docs/workflow_local.md`](docs/workflow_local.md) for local runs and [`docs/workflow_hpc.md`](docs/workflow_hpc.md) for SLURM/HPC execution.
 
-HPCsim uses a topology configuration file to model the hierarchical network structure of HPC clusters. This information is essential for simulating topology-aware scheduling and allocation decisions. The topology file is a plain-text file with switch-level and node-level connections specified line by line.
+```bash
+just run_smoke          # smoke test (local, ~200 steps)
+just run_full_slurm     # full pipeline via SLURM
+```
 
-Each entry defines either a high-level switch-to-switch connection or a low-level switch-to-node mapping.
+---
 
-### Example Format
+## Results
 
-SwitchName=sp-266-p16-1 Level=1 LinkSpeed=1 Switches=le-266-q11-1-res,le-266-q14-1-res,le-266-r17-1-res,le-266-r19-1-res
+> Results will be released upon completion of the full experimental sweep (60 training runs × 2 traces). Check back here for updated figures, summary tables, and the winning algorithm's holdout evaluation.
 
-SwitchName=le-266-q11-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[053-066] SwitchName=le-266-q14-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[087-125] SwitchName=le-266-r17-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[001-020] SwitchName=le-266-r19-1-res Level=0 LinkSpeed=1 Nodes=spartan-bm[021-029],spartan-bm[039-043]
+---
 
-### Field Descriptions
+## HPCSim Environment
 
-| **Field**     | **Description** |
-|---------------|-----------------|
-| `SwitchName`  | Name or identifier of the switch. |
-| `Level`       | Topology level (e.g., core switch = 1, edge switch = 0). |
-| `LinkSpeed`   | Speed of the network links (used for simulation scaling). |
-| `Switches`    | (Optional) List of connected child switches (used in higher-level switches). |
-| `Nodes`       | (Optional) List or range of node hostnames directly connected to the switch. |
+This project uses **HPCSim** — a lightweight, trace-driven Gymnasium environment for HPC scheduling research — as its simulation backend. HPCSim was developed by Wang et al. (2025).
 
-> 🔗 Switch-to-switch and switch-to-node mappings allow HPCsim to simulate realistic network distances and bottlenecks in topology-aware scheduling experiments.
+For environment configuration, trace format, node file format, and topology format, see [`docs/HPCSim.md`](docs/HPCSim.md).
+
+---
+
+## Citations
+
+```bibtex
+@article{Wang2025_1,
+  author    = {Lingfei Wang and Maria A. Rodriguez and Nir Lipovetzky},
+  title     = {Optimizing {HPC} scheduling: a hierarchical reinforcement learning
+               approach for intelligent job selection and allocation},
+  journal   = {Journal of Supercomputing},
+  year      = {2025},
+  volume    = {81},
+  number    = {8},
+  month     = {June},
+  publisher = {Springer},
+  doi       = {10.1007/s11227-025-07396-3}
+}
+```
+
+```bibtex
+@article{Carrasco2020,
+  author    = {Carrasco, Jac{\'i}nto and Garc{\'i}a, Salvador and Rueda, M Mar
+               and Das, Swagatam and Herrera, Francisco},
+  title     = {Recent trends in the use of statistical tests for comparing swarm
+               and evolutionary computing algorithms: Practical guidelines and a
+               critical review},
+  journal   = {Swarm and Evolutionary Computation},
+  volume    = {54},
+  pages     = {100665},
+  year      = {2020},
+  publisher = {Elsevier}
+}
+```
+
+```bibtex
+@article{Mölder2025,
+  author  = {M{\"o}lder, F and Jablonski, KP and Letcher, B and Hall, MB and
+             van Dyken, PC and Tomkins-Tinch, CH and Sochat, V and Forster, J
+             and Vieira, FG and Meesters, C and Lee, S and Twardziok, SO and
+             Kanitz, A and VanCampen, J and Malladi, V and Wilm, A and
+             Holtgrewe, M and Rahmann, S and Nahnsen, S and K{\"o}ster, J},
+  title   = {Sustainable data analysis with Snakemake
+             [version 3; peer review: 2 approved]},
+  journal = {F1000Research},
+  volume  = {10},
+  number  = {33},
+  year    = {2025},
+  doi     = {10.12688/f1000research.29032.3}
+}
+```
+
+```bibtex
+@inproceedings{Dolstra2004,
+  author    = {Dolstra, Eelco and de Jonge, Merijn and Visser, Eelco},
+  title     = {Nix: A Safe and Policy-Free System for Software Deployment},
+  booktitle = {Proceedings of the 18th USENIX Large Installation System
+               Administration Conference (LISA)},
+  year      = {2004},
+  pages     = {79--92}
+}
+```
