@@ -489,6 +489,7 @@ rule baseline:
               --partition {params.partition} \
               --result-dir {params.output_dir} \
               --manifest-path {params.manifest_path} \
+              --force \
               >> {log} 2>&1
         done
         touch {output.baseline_meta}

@@ -232,7 +232,7 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
 
 @clean_all:
     echo "Cleaning all outputs including logs..."
-    rm -rf result/ trained_model/ .snakemake/ logs/run_log.csv logs/snakemake/
+    rm -rf result/ trained_model/ .snakemake/ logs/run_log.csv logs/baseline_run_log.csv logs/snakemake/
     echo "✓ Full clean complete"
 
 @nix_develop:

@@ -11,6 +11,7 @@ plots/
 data/splits/
 
 # Internal working notes (not part of the public repo)
+TODO/
 cur_prog.md
 visualise_instructions.md
 
