@@ -104,9 +104,9 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "Running full pipeline with baseline on {{TRACE}}..."
     snakemake \
         --configfile config.yaml \
-        --config trace_name={{TRACE}} \
         result/{{TRACE}}/stats/stats_summary.json \
         result/{{TRACE}}/baseline/baseline_metadata.json \
+        --config trace_name={{TRACE}} \
         --cores {{cpu_count}}
     echo "✓ Full pipeline + baseline complete."
 
@@ -114,8 +114,8 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "Running baseline scheduler (FCFS + best_fit) on {{TRACE}}..."
     snakemake \
         --configfile config.yaml \
-        --config trace_name={{TRACE}} \
         result/{{TRACE}}/baseline/baseline_metadata.json \
+        --config trace_name={{TRACE}} \
         --cores {{cpu_count}}
     echo "✓ Baseline complete. Outputs in result/{{TRACE}}/baseline/"
 
@@ -151,9 +151,9 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "Submitting full pipeline + baseline to SLURM on {{TRACE}}..."
     snakemake \
         --configfile config.yaml \
-        --config trace_name={{TRACE}} \
         result/{{TRACE}}/stats/stats_summary.json \
         result/{{TRACE}}/baseline/baseline_metadata.json \
+        --config trace_name={{TRACE}} \
         --profile profiles/slurm
     echo "✓ Submitted. Check squeue for status."
 
