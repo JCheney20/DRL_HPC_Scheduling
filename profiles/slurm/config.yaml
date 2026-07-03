@@ -1,5 +1,10 @@
 executor: slurm
 jobs: 100
+# Throttle control-plane RPCs. Snakemake defaults to 10/s each; bursts of sbatch +
+# squeue/sacct overwhelm a busy slurmctld -> "Socket timed out on send/recv operation".
+# 1/s is gentle and costs only seconds of submission time across the sweep.
+max-jobs-per-second: 1
+max-status-checks-per-second: 1
 use-singularity: true
 apptainer-args: "--nv --bind /scratch"   # --bind /scratch so the container can write through symlinked output dirs (trained_model/, result/, logs/ -> /scratch); see docs/workflow_hpc.md
 latency-wait: 60
