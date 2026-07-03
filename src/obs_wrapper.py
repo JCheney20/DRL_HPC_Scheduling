@@ -40,6 +40,15 @@ class Float32Observation(gym.ObservationWrapper):
             }
         )
 
+    def __getattr__(self, name):
+        """
+        Manually forward missing attributes to the base environment 
+        to restore the older Gym API behavior.
+        """
+        if name.startswith('_'):
+            raise AttributeError(f"Attempted to get missing private attribute '{name}'")
+        return getattr(self.env, name)
+
     def observation(self, observation: dict) -> dict:
         return {key: np.asarray(value, dtype=np.float32) for key, value in observation.items()}
 
