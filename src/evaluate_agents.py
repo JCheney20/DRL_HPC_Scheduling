@@ -19,6 +19,7 @@ import pandas as pd
 from sb3_contrib.common.maskable.utils import get_action_masks
 
 from src.HPCsim.HPCsim import HPCsim
+from src.obs_wrapper import Float32Observation
 from src.utils import (
     ALGORITHMS,
     EvalResult,
@@ -123,15 +124,19 @@ def validate_run_spec(spec: RunSpec) -> None:
 
 
 def build_env(spec: RunSpec, seed: int | None, eval_trace: str | None = None) -> HPCsim:
-    return HPCsim(
-        topology_file=f"data/topology/{spec.topology_file}",
-        allocator="best_fit",
-        node_file=f"data/topology/{spec.node_file}",
-        trace_file=f"{eval_trace or spec.trace_file}",
-        random_job=False,
-        seed=seed,
-        window_size=spec.window_size,
-        tail_size=spec.tail_size,
+    # Must match the float32 obs-space the model was trained/saved with, or
+    # SB3's check_for_correct_spaces rejects the load. See src/obs_wrapper.py.
+    return Float32Observation(
+        HPCsim(
+            topology_file=f"data/topology/{spec.topology_file}",
+            allocator="best_fit",
+            node_file=f"data/topology/{spec.node_file}",
+            trace_file=f"{eval_trace or spec.trace_file}",
+            random_job=False,
+            seed=seed,
+            window_size=spec.window_size,
+            tail_size=spec.tail_size,
+        )
     )
 
 

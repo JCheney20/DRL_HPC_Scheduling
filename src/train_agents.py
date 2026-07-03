@@ -33,6 +33,7 @@ from torch import nn
 
 from src.checkpoint import SelectorCheckpointCallback
 from src.HPCsim.HPCsim import HPCsim
+from src.obs_wrapper import Float32Observation
 from src.utils import (
     ALGORITHMS,
     ArgumentParserWithDefaults,
@@ -282,15 +283,18 @@ def build_training_env(
 ) -> HPCsim:
     def _make_env(rank: int = 0):
         env_seed = (seed + rank) if seed is not None else None
-        return HPCsim(
-            topology_file=f"data/topology/{topology_file}",
-            allocator="best_fit",
-            node_file=f"data/topology/{node_file}",
-            trace_file=f"{trace_file}",
-            random_job=False,
-            window_size=window_size,
-            tail_size=tail_size,
-            seed=env_seed,
+        # float32 obs (behavior-identical at the network boundary; halves buffers). See src/obs_wrapper.py.
+        return Float32Observation(
+            HPCsim(
+                topology_file=f"data/topology/{topology_file}",
+                allocator="best_fit",
+                node_file=f"data/topology/{node_file}",
+                trace_file=f"{trace_file}",
+                random_job=False,
+                window_size=window_size,
+                tail_size=tail_size,
+                seed=env_seed,
+            )
         )
 
     use_vec = n_envs > 1 and "dqn" not in algorithm.lower()

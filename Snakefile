@@ -205,11 +205,13 @@ rule train_agent:
         seed=r"\d+",
         algo="|".join(ALGORITHMS),
     resources:
-        mem_mb=98304,   # 96 GB: DQN 200k replay buffer (~52 GB, float64 dict obs ×2) + CUDA/model overhead; PPO/A2C use far less (20 workers, no replay buffer). 128 GB nodes.
-        runtime=480,    # 8 h ceiling: 3M steps ≈ 5.2 h at ~265 s/iter (rollout-bound), headroom for slow nodes
+        # Per-algorithm right-sizing: DQN is single-env with a big replay buffer (RAM-heavy, few cores);
+        # PPO/A2C run 20 SubprocVecEnv workers (core-heavy) but no replay buffer (float32 rollout ~9 GB).
+        mem_mb=lambda wildcards: 98304 if "dqn" in wildcards.algo else 49152,  # DQN: 150k float32 replay (~66 GB) + model/CUDA/env → 96 GB. Non-DQN: rollout + 20 env workers → 48 GB (~2x margin). 128 GB nodes.
+        runtime=720,    # 12 h ceiling (partition max 14 h): PPO ~5.2 h; A2C is update-bound (SB3 n_steps=5 → a grad step every ~100 env steps at n_envs=20) and runs much longer, so give it generous headroom.
         slurm_partition="main",
         gres="gpu:1",
-        cpus_per_task=N_ENVS + 1,  # one core per SubprocVecEnv worker + main process
+        cpus_per_task=lambda wildcards: 4 if "dqn" in wildcards.algo else N_ENVS + 1,  # DQN single-env (~1-4 cores); PPO/A2C use 20 SubprocVecEnv workers + 1 main.
     params:
         save_interval=SAVE_INTERVAL,
         total_saving=TOTAL_SAVING,
