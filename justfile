@@ -19,8 +19,8 @@ cpu_count := if os() == "linux" {
 # Trace name override (just run_full TRACE=deeplearn_job)
 TRACE := env_var_or_default("TRACE", "physical_job")
 
-# Where `archive_results` copies analysis outputs + winning models off scratch
-# into safe (home) storage. Override: just archive_results ARCHIVE=/path
+# Where `archive_results` copies analysis outputs + all algorithms' final models
+# off scratch into safe (home) storage. Override: just archive_results ARCHIVE=/path
 ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
 
 # =============================================================================
@@ -47,7 +47,8 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
     echo "  dry_run_slurm        - Validate production DAG for cluster"
     echo "  run_smoke_slurm      - Submit smoke test to SLURM"
     echo "  run_full_slurm       - Submit full pipeline to SLURM"
-    echo "  archive_results      - Copy results + winning models off scratch to \$HOME/drl_archive"
+    echo "  setup_scratch        - Redirect outputs to /scratch/\$USER (run once per clone)"
+    echo "  archive_results      - Copy results + ALL final models off scratch to \$HOME/drl_archive"
     echo "  slurm_report         - Generate efficiency report after run"
     echo "  build_sif            - Build Apptainer .sif from Nix flake"
     echo ""
@@ -135,9 +136,14 @@ ARCHIVE := env_var_or_default("ARCHIVE", env_var("HOME") + "/drl_archive")
         --profile profiles/slurm
     echo "✓ Full pipeline submitted. Check squeue for status."
 
-# Copy analysis outputs (and the winning algo's final models) off scratch into
-# safe home storage. Idempotent — run it after eval to snapshot the
-# aggregation/stats inputs early, and again at the end to grab stats + models.
+# One-time per clone (re-run after clean_all, which removes the dirs): redirect
+# the bulky output trees to /scratch so runs write there, not $HOME. Idempotent.
+# See docs/workflow_hpc.md §3. Final models are copied back with archive_results.
+setup_scratch:
+    ./src/setup_scratch.sh
+
+# Copy analysis outputs and ALL algorithms' final models off scratch into safe
+# home storage. Run ONCE at the end, after select_best decides the winner.
 @archive_results:
     ./src/archive_results.sh "{{TRACE}}" "{{ARCHIVE}}"
 

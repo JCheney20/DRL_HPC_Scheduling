@@ -43,6 +43,14 @@ class Float32Observation(gym.ObservationWrapper):
     def observation(self, observation: dict) -> dict:
         return {key: np.asarray(value, dtype=np.float32) for key, value in observation.items()}
 
+    def reset(self, *, seed=None, options=None):
+        # HPCsim predates the gymnasium API: its reset() accepts only `seed`, no
+        # `options`. Gymnasium's default ObservationWrapper.reset forwards
+        # `options=` and would raise "HPCsim.reset() got an unexpected keyword
+        # argument 'options'". Drop it (HPCsim never used it).
+        obs, info = self.env.reset(seed=seed)
+        return self.observation(obs), info
+
     # Explicit forwarding for the maskable variants: sb3-contrib's
     # get_action_masks() calls env.action_masks() (or env_method in a VecEnv).
     # Gymnasium's Wrapper.__getattr__ would forward this too, but the maskable
@@ -63,7 +71,7 @@ if __name__ == "__main__":
             )
             self.action_space = gym.spaces.Discrete(2)
 
-        def reset(self, *, seed=None, options=None):
+        def reset(self, *, seed=None):  # mimic HPCsim: old-gym reset, no `options`
             super().reset(seed=seed)
             return self.observation_space.sample(), {}
 
