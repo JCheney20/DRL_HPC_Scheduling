@@ -277,7 +277,14 @@ rule eval_run:
         algo="|".join(ALGORITHMS),
     resources:
         mem_mb=8000,
-        runtime=60,
+        # Eval is a single-env, full-trace deterministic pass — the same Python
+        # per-step obs-build wall as ONE training worker (~11 env-steps/s), with
+        # no 20-env parallelism. A dev70 pass (~59k steps) is ~90 min (more for
+        # maskable's per-step get_action_masks), which blew the old 60 min ceiling
+        # with an empty log (SIGKILL drops buffered stdout). No GPU: the env build
+        # is the wall, not the policy forward pass. 240 = ~2x margin; tune down
+        # from eval_wall_s in the *_metrics.json after the first clean run.
+        runtime=240,
         slurm_partition="main",
     params:
         manifest="logs/run_log.csv",
@@ -406,11 +413,16 @@ rule holdout_eval:
         best_algo_json=f"result/{TRACE_NAME}/best/best_algorithm.json",
         holdout=HOLDOUT_SPLIT,
     output:
-        marker=touch(f"result/{TRACE_NAME}/holdout/.holdout_eval_complete"),
+        marker=touch(f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_complete"),
     log:
-        f"logs/snakemake/{TRACE_NAME}/holdout_eval.log",
+        f"logs/snakemake/{TRACE_NAME}/holdout_eval_{{seed}}.log",
+    wildcard_constraints:
+        seed=r"\d+",
     resources:
         mem_mb=8000,
+        # One holdout30 pass per seed (~40-85 min): the 10 seeds now run as
+        # parallel jobs, replacing the old single job that serialised all 10
+        # (~6-14 h) and blew this ceiling. Winner is read per job (cheap).
         runtime=240,
         slurm_partition="main",
     params:
@@ -425,11 +437,12 @@ rule holdout_eval:
         export GIT_COMMIT="{GIT_COMMIT}"
         mkdir -p {params.holdout_root}/runs
         WINNER=$(python -c "import json; print(json.load(open('{input.best_algo_json}'))['treatment_id'])")
-        echo "Holdout eval: winner=$WINNER on {params.holdout_trace}"
+        echo "Holdout eval: winner=$WINNER seed={wildcards.seed} on {params.holdout_trace}"
         python -m src.evaluate_agents \
             --manifest {params.manifest} \
             --output-dir {params.holdout_root} \
             --filter-treatment "$WINNER" \
+            --filter-seed {wildcards.seed} \
             --eval-trace {params.holdout_trace} \
             {params.deterministic_flag} \
             {params.max_steps_flag} \
@@ -443,7 +456,10 @@ rule holdout_eval:
 
 rule holdout_aggregate:
     input:
-        marker=f"result/{TRACE_NAME}/holdout/.holdout_eval_complete",
+        markers=expand(
+            f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_complete",
+            seed=SEEDS,
+        ),
     output:
         holdout_summary=f"result/{TRACE_NAME}/holdout/holdout_summary.csv",
     log:

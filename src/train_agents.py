@@ -434,6 +434,17 @@ def train_and_log(
     model_path = str(selector_dir / f"{total_timesteps}.zip")
     model.save(model_path)
 
+    # Keep only the final model. The callback's intermediate checkpoints
+    # (300000.zip … 2700000.zip, ~2 GB each) are never read — eval loads
+    # model_path from the manifest and nothing globs selector/ — and 10 per run ×
+    # 60 runs would overflow the 500 GB Ceph scratch. Prune here, the one place
+    # that knows the final path.
+    final_name = Path(model_path).name
+    for ckpt in selector_dir.glob("*.zip"):
+        if ckpt.name != final_name:
+            ckpt.unlink()
+    assert (selector_dir / final_name).exists(), "final model missing after checkpoint prune"
+
     run_id = write_manifest_entry(
         treatment_id=treatment_id,
         algorithm=algorithm,

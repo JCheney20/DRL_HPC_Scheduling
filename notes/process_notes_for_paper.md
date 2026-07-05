@@ -61,6 +61,34 @@ for every algorithm, and (2) an explicit `model.save()` of the final model at th
 manifest path after `learn()` — robust to PPO overshooting `total_timesteps` to a
 full-rollout boundary. This is the file the evaluator loads.
 
+## Evaluation is single-env and full-trace (60 min was not enough)
+
+`evaluate_agents.py` rolls a trained policy deterministically over the *entire*
+evaluation trace in a **single** environment — the same per-step Python
+observation rebuild that bounds training, but without the 20-env parallelism
+(~11 env-steps/s on one worker). A dev70 pass (~59k steps) therefore takes
+~90 min, and the maskable variants add a `get_action_masks` call per step. The
+`eval_run` rule's original `runtime=60` killed these mid-rollout; because SIGKILL
+discards buffered stdout, the log was **empty**, which reads as a hang rather than
+a timeout. Fix: `runtime=240`. No GPU is requested — the wall is the environment
+rebuild, not the policy forward pass, so a GPU would only idle and block the
+scarce training GPUs. The holdout evaluation has the same per-pass cost and
+originally bundled all seeds of the winning algorithm into one serial job
+(~6–14 h); it was split into one job per seed (parallel), so it scales like
+`eval_run`. Each run records `eval_wall_s` in its metrics file for tuning.
+
+## Only the final checkpoint is kept (scratch capacity)
+
+Ceph `/scratch` is 500 GB. Each checkpoint zip is ~2 GB (the policy's first layer
+alone is `56,090 × 4096 ≈ 230M` weights), and the callback writes one per
+`save_interval` — 10 per run × 60 runs ≈ 1.2 TB, far over the cap. The
+intermediate checkpoints are never read: evaluation loads the final `model_path`
+from the manifest and nothing globs the `selector/` directory. So training prunes
+every zip except the final `{total_timesteps}.zip` immediately after the explicit
+final save, holding scratch to ~60 × 2 GB ≈ 120 GB of models. (Equivalent lazier
+option, not taken so mid-run checkpoints still exist for inspection: don't write
+the intermediates at all.)
+
 ## Reproducibility niceties
 
 - `PYTHONUNBUFFERED=1` is exported in the train rule so a hard crash (e.g. an
