@@ -368,6 +368,14 @@ def build_model(
     if "ppo" in algorithm.lower():
         model_kwargs["n_epochs"] = n_epochs
 
+    # A2C entropy floor. With the default ent_coef=0.0 on the ~230M-param
+    # [4096,2048,1024] net, the policy saturated to ~0 entropy within 20k steps;
+    # RMSprop (eps=1e-5) then amplified the near-zero gradients into non-finite
+    # logits and MaskableCategorical failed the Simplex() check. 0.01 (SB3's own
+    # A2C example value) keeps entropy up and prevents the collapse. A2C-only.
+    if "a2c" in algorithm.lower():
+        model_kwargs["ent_coef"] = 0.01
+
     return algo_class("MultiInputPolicy", env, **model_kwargs)
 
 

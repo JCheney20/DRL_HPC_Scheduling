@@ -185,6 +185,13 @@ def evaluate_one_run(
             raise ValueError(f"[{spec.run_id}] Non-finite reward encountered: {reward}")
         episode_reward += float(reward)
         n_steps += 1
+        # Progress heartbeat: the loop is a single-env full-trace pass with no
+        # SB3 log table, so without this the log is empty until [OK] and a
+        # timeout is indistinguishable from a hang. Gives live steps/s to
+        # right-size the eval_run runtime. flush so it survives a SIGKILL.
+        if n_steps % 2000 == 0:
+            el = time.perf_counter() - t_start
+            print(f"[{spec.run_id}] {n_steps} steps, {el:.0f}s, {n_steps / el:.1f} steps/s", flush=True)
 
     eval_wall_s = time.perf_counter() - t_start
     max_w, avg_w = safe_metric_access(

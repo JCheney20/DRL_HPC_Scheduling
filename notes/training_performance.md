@@ -7,8 +7,8 @@ applied uniformly across all algorithms.
 ## 1. Uniform SLURM resources + DQN vectorization (`Snakefile` `train_agent`)
 
 **First attempt (per-algorithm sizing):** DQN ran a *single* env so it was given few cores (4) but
-the 96 GB its 150k replay buffer needs; PPO/A2C got 21 cores (20 workers + main) but only 48 GB.
-Behaviour-preserving, but it assumed single-env DQN was viable.
+most of the RAM (for its 150k replay buffer); PPO/A2C got the cores (21 = 20 workers + main) but far
+less RAM. Behaviour-preserving, but it assumed single-env DQN was viable.
 
 **It was not, on the L4s.** Single-env DQN could not complete 3M steps in 12 h and produced no log
 table at all — the wall is HPCsim's per-step observation build (56,090 values in Python), not the
@@ -22,11 +22,11 @@ the same ~4–5 h env-bound ceiling. Resources are therefore **uniform** across 
 
 | resource | value |
 |---|---|
-| mem_mb | 125000 (125 GB of 128 GB nodes) |
+| mem_mb | 120000 (120 GB of 128 GB nodes; 125 GB tripped a node RAM limit) |
 | cpus_per_task | N_ENVS + 1 (21) |
 | runtime | 720 min (12 h ceiling, kept as safety; all algos expected < 5 h) |
 
-DQN's 150k float32 replay (~66 GB) + 20 workers (~40 GB) ≈ 106 GB fits the 125 GB request; one job
+DQN's 150k float32 replay (~66 GB) + 20 workers (~40 GB) ≈ 106 GB fits the 120 GB request; one job
 per node (GPU-bound). **Methodological note:** with a VecEnv, DQN's gradient steps =
 `total_steps / (train_freq × n_envs)` — fewer updates per experience than single-env, a
 compute-feasibility concession held constant across all seeds. After the first full sweep, run

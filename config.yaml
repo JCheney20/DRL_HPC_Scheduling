@@ -52,8 +52,8 @@ save_interval: 300000
 total_saving: 10                   # total timesteps = save_interval * total_saving = 3M steps. 10 checkpoints (was 30 at 100k); pipeline evals only the final (3000000.zip), so fewer snapshots = ~3x less scratch I/O.
 window_size: 512
 tail_size: 64
-buffer_size: 150_000               # DQN replay buffer. float32 obs (src/obs_wrapper.py) = 219 KB; SB3 stores obs+next_obs so each transition ≈ 0.44 MB. 150k ≈ 66 GB; with DQN now on 20 env workers (~40 GB) it fits the 125 GB request on 128 GB nodes. float64 (438 KB) would have needed 132 GB. Dict obs forbids optimize_memory_usage in SB3.
-n_envs: 20                         # SubprocVecEnv workers for PPO/A2C (DQN stays single-env); 20 workers + 1 main = 21 of 24 cores
+buffer_size: 150_000               # DQN replay buffer. float32 obs (src/obs_wrapper.py) = 219 KB; SB3 stores obs+next_obs so each transition ≈ 0.44 MB. 150k ≈ 66 GB; with DQN now on 20 env workers (~40 GB) it fits the 120 GB request on 128 GB nodes. float64 (438 KB) would have needed 132 GB. Dict obs forbids optimize_memory_usage in SB3.
+n_envs: 20                         # SubprocVecEnv workers for all algorithms (DQN vectorized too); 20 workers + 1 main = 21 of 24 cores
 batch_size: 2048                   # minibatch size: PPO (buffer=n_envs*n_steps=40960, 20 batches/epoch × 5 epochs=100 steps); DQN (replay sample size)
 n_epochs: 5                        # PPO optimisation epochs per rollout (SB3 default 10; halved to cut update time)
 learning_rate: "linear_3e-4"       # linear decay 3e-4 -> 0 over training; keeps fast early learning, tames late clip_fraction climb. Use "3e-4" for constant.

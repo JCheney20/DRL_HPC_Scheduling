@@ -33,10 +33,10 @@ can write through the links.
 
 ```bash
 cd <repo>
-mkdir -p /scratch/$USER/hera/{trained_model,result,logs}
-ln -s /scratch/$USER/hera/trained_model trained_model
-ln -s /scratch/$USER/hera/result        result
-ln -s /scratch/$USER/hera/logs          logs
+mkdir -p /scratch/$USER/DRL_HPC_Scheduling/{trained_model,result,logs}
+ln -s /scratch/$USER/DRL_HPC_Scheduling/trained_model trained_model
+ln -s /scratch/$USER/DRL_HPC_Scheduling/result        result
+ln -s /scratch/$USER/DRL_HPC_Scheduling/logs          logs
 ```
 
 Use **absolute** symlink targets so they resolve identically inside and outside

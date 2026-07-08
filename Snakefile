@@ -209,7 +209,7 @@ rule train_agent:
         # DQN included. Single-env DQN was throughput-bound on the L4s (HPCsim's
         # per-step obs build is the wall); MaskableDQN/SB3 DQN both support
         # multi-env collection, so all algorithms share one resource profile.
-        mem_mb=125000,   # 125 GB of the 128 GB nodes: DQN's 150k float32 replay (~66 GB) + 20 env workers (~40 GB) ≈ 106 GB. On-policy needs far less but shares the uniform request (1 job/node, GPU-bound).
+        mem_mb=120000,   # 120 GB of the 128 GB nodes: DQN's 150k float32 replay (~66 GB) + 20 env workers (~40 GB) ≈ 106 GB. On-policy needs far less but shares the uniform request (1 job/node, GPU-bound). 125 GB tripped the node's configurable RAM limit, so 120.
         runtime=720,     # 12 h ceiling kept as safety; with 20-env collection + TF32 (already on) every algorithm is expected to finish < 5 h.
         slurm_partition="main",
         gres="gpu:1",
@@ -278,13 +278,14 @@ rule eval_run:
     resources:
         mem_mb=8000,
         # Eval is a single-env, full-trace deterministic pass — the same Python
-        # per-step obs-build wall as ONE training worker (~11 env-steps/s), with
-        # no 20-env parallelism. A dev70 pass (~59k steps) is ~90 min (more for
-        # maskable's per-step get_action_masks), which blew the old 60 min ceiling
-        # with an empty log (SIGKILL drops buffered stdout). No GPU: the env build
-        # is the wall, not the policy forward pass. 240 = ~2x margin; tune down
-        # from eval_wall_s in the *_metrics.json after the first clean run.
-        runtime=240,
+        # per-step obs-build wall as ONE training worker, no 20-env parallelism.
+        # A dev70 pass is ~59k steps; maskable adds a get_action_masks per step
+        # and empirically blew BOTH 60 and 240 min ceilings with an empty log.
+        # The loop now prints a steps/s heartbeat every 2k steps (unbuffered
+        # below), so the log reveals fps and a hang is no longer mistaken for a
+        # timeout. No GPU: the env build is the wall, not the forward pass. 480 =
+        # headroom for slow maskable; tune from the heartbeat / eval_wall_s.
+        runtime=480,
         slurm_partition="main",
     params:
         manifest="logs/run_log.csv",
@@ -295,6 +296,7 @@ rule eval_run:
         """
         set -e
         export GIT_COMMIT="{GIT_COMMIT}"
+        export PYTHONUNBUFFERED=1
         mkdir -p {params.eval_root}/runs
 
         python -m src.evaluate_agents \
@@ -420,10 +422,11 @@ rule holdout_eval:
         seed=r"\d+",
     resources:
         mem_mb=8000,
-        # One holdout30 pass per seed (~40-85 min): the 10 seeds now run as
+        # One holdout30 pass (~25k steps) per seed: the 10 seeds now run as
         # parallel jobs, replacing the old single job that serialised all 10
-        # (~6-14 h) and blew this ceiling. Winner is read per job (cheap).
-        runtime=240,
+        # and blew this ceiling. Same slow-maskable risk as eval_run, so 480
+        # with the same steps/s heartbeat in the log. Winner is read per job.
+        runtime=480,
         slurm_partition="main",
     params:
         manifest="logs/run_log.csv",
@@ -435,6 +438,7 @@ rule holdout_eval:
         """
         set -e
         export GIT_COMMIT="{GIT_COMMIT}"
+        export PYTHONUNBUFFERED=1
         mkdir -p {params.holdout_root}/runs
         WINNER=$(python -c "import json; print(json.load(open('{input.best_algo_json}'))['treatment_id'])")
         echo "Holdout eval: winner=$WINNER seed={wildcards.seed} on {params.holdout_trace}"

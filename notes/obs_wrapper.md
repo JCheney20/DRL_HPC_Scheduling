@@ -27,7 +27,7 @@ precision is wasted (see below), so it is free memory to reclaim.
 ## Direct benefits
 
 - **DQN replay buffer halves**: 438→219 KB/obs, transition 0.88→0.44 MB. This is what lets
-  `buffer_size=150,000` fit (~66 GB) inside the 96 GB request — 150k at float64 would need 132 GB
+  `buffer_size=150,000` fit (~66 GB) inside the 120 GB request — 150k at float64 would need 132 GB
   and OOM.
 - **PPO rollout buffer halves**: ~18→9 GB.
 - **Less host↔device transfer** every step for all algorithms (smaller obs tensors copied to GPU).
