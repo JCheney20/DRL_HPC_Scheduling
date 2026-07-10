@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from sb3_contrib.common.maskable.utils import get_action_masks
 
+from src.alloc_wrapper import AllocationCommit
 from src.HPCsim.HPCsim import HPCsim
 from src.obs_wrapper import Float32Observation
 from src.utils import (
@@ -126,16 +127,21 @@ def validate_run_spec(spec: RunSpec) -> None:
 def build_env(spec: RunSpec, seed: int | None, eval_trace: str | None = None) -> HPCsim:
     # Must match the float32 obs-space the model was trained/saved with, or
     # SB3's check_for_correct_spaces rejects the load. See src/obs_wrapper.py.
+    # AllocationCommit commits the placement HPCsim.step only flags (see
+    # src/alloc_wrapper.py); it MUST match the training env wrapping in
+    # train_agents.build_env, or the policy is evaluated out-of-distribution.
     return Float32Observation(
-        HPCsim(
-            topology_file=f"data/topology/{spec.topology_file}",
-            allocator="best_fit",
-            node_file=f"data/topology/{spec.node_file}",
-            trace_file=f"{eval_trace or spec.trace_file}",
-            random_job=False,
-            seed=seed,
-            window_size=spec.window_size,
-            tail_size=spec.tail_size,
+        AllocationCommit(
+            HPCsim(
+                topology_file=f"data/topology/{spec.topology_file}",
+                allocator="best_fit",
+                node_file=f"data/topology/{spec.node_file}",
+                trace_file=f"{eval_trace or spec.trace_file}",
+                random_job=False,
+                seed=seed,
+                window_size=spec.window_size,
+                tail_size=spec.tail_size,
+            )
         )
     )
 

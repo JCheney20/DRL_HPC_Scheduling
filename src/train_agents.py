@@ -31,6 +31,7 @@ import torch
 from stable_baselines3.common.utils import set_random_seed
 from torch import nn
 
+from src.alloc_wrapper import AllocationCommit
 from src.checkpoint import SelectorCheckpointCallback
 from src.HPCsim.HPCsim import HPCsim
 from src.obs_wrapper import Float32Observation
@@ -284,16 +285,21 @@ def build_training_env(
     def _make_env(rank: int = 0):
         env_seed = (seed + rank) if seed is not None else None
         # float32 obs (behavior-identical at the network boundary; halves buffers). See src/obs_wrapper.py.
+        # AllocationCommit commits the placement HPCsim.step only flags (see
+        # src/alloc_wrapper.py); it MUST match the eval env wrapping in
+        # evaluate_agents.build_env, or the policy is evaluated out-of-distribution.
         return Float32Observation(
-            HPCsim(
-                topology_file=f"data/topology/{topology_file}",
-                allocator="best_fit",
-                node_file=f"data/topology/{node_file}",
-                trace_file=f"{trace_file}",
-                random_job=False,
-                window_size=window_size,
-                tail_size=tail_size,
-                seed=env_seed,
+            AllocationCommit(
+                HPCsim(
+                    topology_file=f"data/topology/{topology_file}",
+                    allocator="best_fit",
+                    node_file=f"data/topology/{node_file}",
+                    trace_file=f"{trace_file}",
+                    random_job=False,
+                    window_size=window_size,
+                    tail_size=tail_size,
+                    seed=env_seed,
+                )
             )
         )
 
