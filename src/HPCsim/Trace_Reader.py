@@ -73,6 +73,17 @@ class Job:
             self.submit = data['Submit']
             self.total_run = min(data['ElapsedRaw'], self.requested_time)
 
+        # Cluster.check_allocate_list derives per-task resources by dividing by
+        # requested_node on essentially every observation build; a row with
+        # requested_node < 1 would raise ZeroDivisionError deep in a run.
+        # Fail loud at load time (t=0) instead, naming the offending job — do
+        # not silently mutate the trace.
+        if self.requested_node < 1:
+            raise ValueError(
+                f"Job {self.id}: requested_node must be >= 1, got "
+                f"{self.requested_node!r}"
+            )
+
     def convert_datetime(self, time_str):
         try:
             time_dt = datetime.strptime(time_str, '%Y-%m-%dT%H:%M:%S')

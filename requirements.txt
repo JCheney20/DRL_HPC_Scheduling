@@ -23,7 +23,9 @@ tzdata
 gymnasium
 torch
 torchvision
-stable-baselines3
+# >=2.3: the custom MaskableDQN/MaskableA2C call the public dump_logs() API,
+# which was named _dump_logs() before SB3 2.3. An older resolve would AttributeError.
+stable-baselines3>=2.3
 sb3-contrib
 
 # --- Statistics ---

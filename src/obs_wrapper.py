@@ -21,6 +21,26 @@ from __future__ import annotations
 
 import gymnasium as gym
 import numpy as np
+from stable_baselines3.common.monitor import Monitor
+
+
+class MaskableMonitor(Monitor):
+    """SB3 Monitor that also forwards ``action_masks``.
+
+    Monitor is needed for SB3 to emit ``rollout/ep_rew_mean`` / ``ep_len_mean``
+    (it injects the per-episode ``info["episode"]`` block that the logger reads);
+    without it the console shows only ``time/*``, which is exactly what hid the
+    NaN-reward regression. But this gymnasium version does not auto-forward
+    attributes through wrappers (see the note in ``Float32Observation`` and
+    ``AllocationCommit``), so a stock Monitor would shadow ``action_masks`` and
+    break sb3-contrib's ``get_action_masks``/``env_method("action_masks")``.
+    Forward it explicitly. Monitor does not alter observations, rewards, or the
+    transition, so wrapping with it does not violate the train/eval env-parity
+    contract — it is training-only bookkeeping.
+    """
+
+    def action_masks(self) -> np.ndarray:
+        return self.env.action_masks()
 
 
 class Float32Observation(gym.ObservationWrapper):

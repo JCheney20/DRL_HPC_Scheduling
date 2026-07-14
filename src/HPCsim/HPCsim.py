@@ -107,9 +107,9 @@ class ENV_allocator(gym.Env):
         if len(self.waiting_time_list) == 100:
             for i in self.env.queue.job_queue:
                 self.waiting_time_list.append(self.env.time-i.system_submit)
-            average_waiting = np.mean(self.waiting_time_list)
-            # self.waiting_time = 0.2*self.waiting_time + 0.8*average_waiting
-            reward -= average_waiting
+            # Guard empty mean and scale to hours, mirroring HPCsim.get_reward.
+            if self.waiting_time_list:
+                reward -= float(np.mean(self.waiting_time_list)) / 3600.0
             self.waiting_time_list = []
 
         return reward
@@ -275,7 +275,12 @@ class HPCsim(gym.Env):
     def step(self, action):
         self.action_counts += 1
         action = [action]
-        reward = 0
+        # Reward runs on a fixed 512-action cadence (see get_reward) and is
+        # computed every step. It must NOT be gated on the action being a
+        # forward/no-op: if the 512th action is a job selection, an exact-match
+        # tick would sail past and the reward would stay 0 for the rest of the
+        # episode.
+        reward = self.get_reward()
         forward_time = False
         allocation = False
         # find selected job
@@ -283,7 +288,6 @@ class HPCsim(gym.Env):
             forward_time = True
             selected_job = None
             self.forward_count += 1
-            reward = self.get_reward()
         elif len(self.queue.job_queue) > self.window_size:
             self.forward_count = 0
             if action[0] < self.window_size - self.tail_size:
@@ -315,8 +319,25 @@ class HPCsim(gym.Env):
             queue, job_count, mask = self.queue.get_state(window=self.window_size, cluster=self.cluster, tail=self.tail_size, time=self.time)
             # if there is no job can be allocated by the agent, we continue forwarding
             while (job_count == 0) and not done:
-                if len(self.event_queue) > 0:
-                    self.forward_system_time()
+                if len(self.event_queue) == 0:
+                    # No pending events, but the queue still holds only jobs
+                    # that can never be allocated (e.g. a job requesting more
+                    # resource than the whole cluster has). Time cannot advance
+                    # and none of these jobs can ever run, so the episode is
+                    # terminal here. Without this, the loop spins forever inside
+                    # step() and the AllocationCommit hang guard — which counts
+                    # *returned* steps — never fires.
+                    stuck = [j.id for j in self.queue.job_queue]
+                    preview = stuck[:10]
+                    print(
+                        f"[HPCsim] no pending events but {len(stuck)} unallocatable "
+                        f"job(s) remain (ids {preview}{'...' if len(stuck) > 10 else ''}) "
+                        f"at time {self.time} — terminating episode.",
+                        flush=True,
+                    )
+                    done = True
+                    break
+                self.forward_system_time()
                 queue, job_count, mask = self.queue.get_state(window=self.window_size, cluster=self.cluster,
                                                         tail=self.tail_size, time=self.time)
                 if len(self.event_queue) + len(self.queue.job_queue) == 0:
@@ -346,13 +367,21 @@ class HPCsim(gym.Env):
 
     def get_reward(self):
         reward = 0
-        if self.action_counts == 512:
+        # >= (not ==) so the tick still fires if the counter was advanced past
+        # 512 on a step where get_reward happened not to reset it; the reset
+        # below re-arms it.
+        if self.action_counts >= 512:
             for i in self.queue.job_queue:
                 self.waiting_time_list.append(self.time-i.system_submit)
-            average_waiting = np.mean(self.waiting_time_list)
-            # self.waiting_time = 0.2*self.waiting_time + 0.8*average_waiting
-            # reward -= self.waiting_time
-            reward -= average_waiting
+            # np.mean([]) is nan. An empty queue at the tick means nothing is
+            # waiting, so the correct penalty is 0 — guarding here stops a nan
+            # reward from poisoning returns/advantages and NaN-ing the network.
+            if self.waiting_time_list:
+                # Scale seconds -> hours so value targets stay O(1-30) instead
+                # of O(1e4-1e5); identical ordering and optimal policy, but the
+                # critic can actually fit the target scale within the run's
+                # gradient-step budget.
+                reward -= float(np.mean(self.waiting_time_list)) / 3600.0
             self.waiting_time_list = []
             self.action_counts = 0
 

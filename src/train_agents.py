@@ -34,7 +34,7 @@ from torch import nn
 from src.alloc_wrapper import AllocationCommit
 from src.checkpoint import SelectorCheckpointCallback
 from src.HPCsim.HPCsim import HPCsim
-from src.obs_wrapper import Float32Observation
+from src.obs_wrapper import Float32Observation, MaskableMonitor
 from src.utils import (
     ALGORITHMS,
     ArgumentParserWithDefaults,
@@ -288,17 +288,23 @@ def build_training_env(
         # AllocationCommit commits the placement HPCsim.step only flags (see
         # src/alloc_wrapper.py); it MUST match the eval env wrapping in
         # evaluate_agents.build_env, or the policy is evaluated out-of-distribution.
-        return Float32Observation(
-            AllocationCommit(
-                HPCsim(
-                    topology_file=f"data/topology/{topology_file}",
-                    allocator="best_fit",
-                    node_file=f"data/topology/{node_file}",
-                    trace_file=f"{trace_file}",
-                    random_job=False,
-                    window_size=window_size,
-                    tail_size=tail_size,
-                    seed=env_seed,
+        # MaskableMonitor is the OUTERMOST wrapper (training only): it lets SB3
+        # log rollout/ep_rew_mean and forwards action_masks. It does not touch
+        # obs/reward/transition, so eval parity (which wraps up to
+        # Float32Observation only) is preserved. See src/obs_wrapper.py.
+        return MaskableMonitor(
+            Float32Observation(
+                AllocationCommit(
+                    HPCsim(
+                        topology_file=f"data/topology/{topology_file}",
+                        allocator="best_fit",
+                        node_file=f"data/topology/{node_file}",
+                        trace_file=f"{trace_file}",
+                        random_job=False,
+                        window_size=window_size,
+                        tail_size=tail_size,
+                        seed=env_seed,
+                    )
                 )
             )
         )
@@ -306,12 +312,25 @@ def build_training_env(
     # Every algorithm (DQN included) collects from a VecEnv when n_envs > 1.
     # Single-env DQN was throughput-bound on the L4s (the HPCsim per-step obs
     # build is the wall), and MaskableDQN/SB3 DQN both support multi-env
-    # collection (support_multi_env=True), so vectorize it too.
-    use_vec = n_envs > 1
-    if use_vec:
-        from stable_baselines3.common.vec_env import SubprocVecEnv
-        return SubprocVecEnv([lambda r=i: _make_env(r) for i in range(n_envs)])
-    return _make_env()
+    # collection (support_multi_env=True), so vectorize it too. Even in the
+    # single-env case we build a DummyVecEnv so the whole stack can be wrapped in
+    # VecCheckNan uniformly.
+    from stable_baselines3.common.vec_env import (
+        DummyVecEnv,
+        SubprocVecEnv,
+        VecCheckNan,
+    )
+
+    if n_envs > 1:
+        venv = SubprocVecEnv([lambda r=i: _make_env(r) for i in range(n_envs)])
+    else:
+        venv = DummyVecEnv([lambda: _make_env(0)])
+
+    # Raise at the exact step a NaN/inf enters obs, reward, or action instead of
+    # one rollout later inside the optimizer (where it surfaces as an opaque
+    # MaskableCategorical logits error, far from the cause). This is the guard
+    # that would have caught the empty-queue reward regression immediately.
+    return VecCheckNan(venv, raise_exception=True)
 
 
 def parse_learning_rate(spec: str) -> float | Any:
@@ -422,19 +441,20 @@ def train_and_log(
     if "mask" not in algorithm.lower():
         use_masking = False
 
+    checkpoint_callback = SelectorCheckpointCallback(
+        # CheckpointCallback counts callback CALLS, not env-steps: with a
+        # 20-env SubprocVecEnv one call advances n_envs steps, so save_freq
+        # must be divided by n_envs to keep the cadence in env-steps (SB3
+        # docs). Without this, on-policy n_calls maxes at total/n_envs and
+        # never reaches save_freq → zero checkpoints saved. DQN is single-env
+        # (n_envs=1) → unchanged.
+        save_freq=max(save_interval // getattr(model, "n_envs", 1), 1),
+        save_path=str(selector_dir),
+    )
     learn_kwargs: dict[str, Any] = {
         "total_timesteps": total_timesteps,
         "tb_log_name": name,
-        "callback": SelectorCheckpointCallback(
-            # CheckpointCallback counts callback CALLS, not env-steps: with a
-            # 20-env SubprocVecEnv one call advances n_envs steps, so save_freq
-            # must be divided by n_envs to keep the cadence in env-steps (SB3
-            # docs). Without this, on-policy n_calls maxes at total/n_envs and
-            # never reaches save_freq → zero checkpoints saved. DQN is single-env
-            # (n_envs=1) → unchanged.
-            save_freq=max(save_interval // getattr(model, "n_envs", 1), 1),
-            save_path=str(selector_dir),
-        ),
+        "callback": checkpoint_callback,
     }
     if "mask" in algorithm.lower():
         learn_kwargs["use_masking"] = use_masking
@@ -443,7 +463,9 @@ def train_and_log(
     model.learn(**learn_kwargs)
     wall_clock_s = time.perf_counter() - t_start
 
-    episodes_completed = int(model._episode_num)
+    # The callback counts dones for every algorithm; model._episode_num is only
+    # maintained by MaskableDQN and is 0 for PPO/A2C. Prefer the callback count.
+    episodes_completed = int(checkpoint_callback.episodes_completed)
 
     # Persist the final model explicitly at the exact path the manifest and
     # evaluator expect. The checkpoint callback alone is not enough: PPO
