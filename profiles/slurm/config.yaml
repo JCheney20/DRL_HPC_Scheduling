@@ -5,6 +5,13 @@ jobs: 100
 # 1/s is gentle and costs only seconds of submission time across the sweep.
 max-jobs-per-second: 1
 max-status-checks-per-second: 1
+# Auto-resubmit a job that fails to submit/run. The main cause here is the
+# transient "Socket timed out on send/recv operation" from a busy slurmctld
+# during the start-of-run submission burst (all dependency-free jobs are ready
+# at once) — retries let Snakemake resubmit it instead of needing a manual
+# relaunch. Safe now that the NaN training crash is fixed: a genuinely broken
+# job fails at most a couple of extra times rather than looping.
+retries: 2
 use-singularity: true
 apptainer-args: "--nv --bind /scratch"   # --bind /scratch so the container can write through symlinked output dirs (trained_model/, result/, logs/ -> /scratch); see docs/workflow_hpc.md
 latency-wait: 60

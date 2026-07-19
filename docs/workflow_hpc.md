@@ -68,6 +68,24 @@ a 3M run completes in ~5–6 h.
 - Per-rule logs: `logs/snakemake/<trace>/*.log` (on scratch via the symlink).
 - `just slurm_report` — SLURM efficiency report after a run.
 
+### Known failure mode: `srun: Job N step creation still disabled, retrying (Requested nodes are busy)`
+
+The slurm-jobstep executor plugin wraps every rule inside its sbatch
+allocation in an inner `srun`. When slurmctld refuses to create that job step
+(node stuck completing a previous job, hung prolog, or the SLURM ≥ 20.11
+exclusive-step default conflicting with the extern/batch step), stock srun
+retries forever — the job never fails, so it silently burns its whole runtime
+ceiling to TIMEOUT. `nix/snakemake_slurm_jobstep.nix` therefore patches the
+plugin's srun call to `--overlap --immediate=300`: the step shares the
+allocation with the extern/batch step, and if it still can't start within
+5 min the job errors out and the profile's `retries: 2` resubmits it (usually
+onto a healthy node). If a job hangs this way anyway, capture
+`scontrol show job <id>` and `scontrol show node <node>` while it is stuck
+(look for COMPLETING/DRAIN or a stuck prolog) for the admins. Last-resort
+fallback: setting any `mpi` resource (e.g. `mpi: "none"` in the profile's
+`default-resources`) makes the plugin skip the inner srun entirely and exec
+the rule directly in the batch step.
+
 ## 6. Archive results off scratch
 
 `/scratch` is large but may be purged; pull the analysis outputs (and the
