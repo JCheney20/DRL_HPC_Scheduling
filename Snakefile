@@ -32,7 +32,7 @@ Usage:
     # Dry run (validate DAG only)
     snakemake --configfile config.smoke.yaml --dry-run
 
-    # Baseline only (skip all DRL training/eval)
+     Baseline only (skip all DRL training/eval)
     snakemake --configfile config.yaml --config baseline_only=True --cores all
 
 Important:
@@ -205,15 +205,11 @@ rule train_agent:
         seed=r"\d+",
         algo="|".join(ALGORITHMS),
     resources:
-        # Uniform sizing: every algorithm now runs N_ENVS SubprocVecEnv workers —
-        # DQN included. Single-env DQN was throughput-bound on the L4s (HPCsim's
-        # per-step obs build is the wall); MaskableDQN/SB3 DQN both support
-        # multi-env collection, so all algorithms share one resource profile.
-        mem_mb=120000,   # 120 GB of the 128 GB nodes: DQN's 150k float32 replay (~66 GB) + 20 env workers (~40 GB) ≈ 106 GB. On-policy needs far less but shares the uniform request (1 job/node, GPU-bound). 125 GB tripped the node's configurable RAM limit, so 120.
-        runtime=720,     # 12 h ceiling kept as safety; with 20-env collection + TF32 (already on) every algorithm is expected to finish < 5 h.
+        mem_mb=120000,  
+        runtime=360,   
         slurm_partition="main",
         gres="gpu:1",
-        cpus_per_task=N_ENVS + 1,   # 20 SubprocVecEnv workers + 1 main, all algorithms.
+        cpus_per_task=N_ENVS + 1,   
     params:
         save_interval=SAVE_INTERVAL,
         total_saving=TOTAL_SAVING,
@@ -296,6 +292,7 @@ rule eval_run:
     params:
         manifest="logs/run_log.csv",
         eval_root=f"result/{TRACE_NAME}/eval_runs",
+        filter_split=f"{TRACE_NAME}_r70",
         max_steps_flag=EVAL_MAX_STEPS_FLAG,
         deterministic_flag="--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic",
     shell:
@@ -310,6 +307,7 @@ rule eval_run:
             --output-dir {params.eval_root} \
             --filter-seed {wildcards.seed} \
             --filter-algo {wildcards.algo} \
+            --filter-split {params.filter_split} \
             {params.deterministic_flag} \
             {params.max_steps_flag} \
             >> {log} 2>&1
@@ -340,6 +338,7 @@ rule aggregate:
         manifest="logs/run_log.csv",
         eval_root=f"result/{TRACE_NAME}/eval_runs/runs",
         output_dir=f"result/{TRACE_NAME}/aggregate",
+        filter_split=f"{TRACE_NAME}_r70",
     shell:
         """
         export GIT_COMMIT="{GIT_COMMIT}"
@@ -347,6 +346,7 @@ rule aggregate:
             --manifest {params.manifest} \
             --eval-root {params.eval_root} \
             --output-dir {params.output_dir} \
+            --filter-split {params.filter_split} \
             >> {log} 2>&1
         """
 
@@ -439,6 +439,7 @@ rule holdout_eval:
         manifest="logs/run_log.csv",
         holdout_root=f"result/{TRACE_NAME}/holdout",
         holdout_trace=HOLDOUT_SPLIT,
+        filter_split=f"{TRACE_NAME}_r70",
         max_steps_flag=EVAL_MAX_STEPS_FLAG,
         deterministic_flag="--deterministic" if EVAL_DETERMINISTIC else "--no-deterministic",
     shell:
@@ -454,6 +455,7 @@ rule holdout_eval:
             --output-dir {params.holdout_root} \
             --filter-treatment "$WINNER" \
             --filter-seed {wildcards.seed} \
+            --filter-split {params.filter_split} \
             --eval-trace {params.holdout_trace} \
             {params.deterministic_flag} \
             {params.max_steps_flag} \
@@ -483,6 +485,7 @@ rule holdout_aggregate:
         manifest="logs/run_log.csv",
         eval_root=f"result/{TRACE_NAME}/holdout/runs",
         output_dir=f"result/{TRACE_NAME}/holdout",
+        filter_split=f"{TRACE_NAME}_r70",
     shell:
         """
         set -e
@@ -491,6 +494,7 @@ rule holdout_aggregate:
             --manifest {params.manifest} \
             --eval-root {params.eval_root} \
             --output-dir {params.output_dir} \
+            --filter-split {params.filter_split} \
             --no-strict \
             >> {log} 2>&1
         cp {params.output_dir}/algorithm_summary.csv {output.holdout_summary}

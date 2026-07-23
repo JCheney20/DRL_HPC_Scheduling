@@ -67,6 +67,14 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Fail if any expected eval file is missing.",
     )
+    parser.add_argument(
+        "--filter-split",
+        type=str,
+        default=None,
+        help="Only aggregate manifest runs matching this split_id (e.g. "
+        "deeplearn_job_r70). The manifest is shared across traces; this keeps "
+        "foreign-trace run_ids out of the aggregate.",
+    )
     return parser.parse_args()
 
 
@@ -185,6 +193,9 @@ def main() -> None:
 
     manifest_df = load_run_manifest(manifest_path)
     validate_loaded_manifest(manifest_df, context="run_manifest")
+
+    if args.filter_split is not None:
+        manifest_df = manifest_df[manifest_df["split_id"] == args.filter_split]
 
     artifact_paths = discover_eval_artifacts(manifest_df, eval_root, strict=args.strict)
 

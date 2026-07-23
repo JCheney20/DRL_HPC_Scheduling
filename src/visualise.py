@@ -258,7 +258,9 @@ def draw_cd_diagrams(cd_df: pd.DataFrame, nemenyi_df: pd.DataFrame, plots_dir: P
         sig_matrix = _build_sig_matrix(metric_nemenyi, ranks.index.tolist())
 
         fig, ax = plt.subplots(figsize=(10, max(3, len(ranks) * 0.5)))
-        sp.critical_difference_diagram(ranks, sig_matrix, ax=ax, alpha=alpha)
+        # ponytail: installed scikit-posthocs predates the `alpha` kwarg; it thresholds
+        # the p-value sig_matrix at a hardcoded 0.05 internally (matches alpha default).
+        sp.critical_difference_diagram(ranks, sig_matrix, ax=ax)
         ax.set_title(f"CD Diagram — {metric} (α={alpha})")
 
         save_figure(fig, plots_dir, f"cd_diagram_{metric}")

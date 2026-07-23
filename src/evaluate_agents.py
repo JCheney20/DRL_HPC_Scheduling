@@ -68,6 +68,14 @@ def parse_args() -> argparse.Namespace:
         help="Only evaluate runs matching this treatment_id (e.g. the winner from best_algorithm.json).",
     )
     parser.add_argument(
+        "--filter-split",
+        type=str,
+        default=None,
+        help="Only evaluate runs matching this split_id (e.g. deeplearn_job_r70). "
+        "The run manifest is shared across traces, so (seed, algo) alone is "
+        "ambiguous once more than one trace has been trained; this disambiguates.",
+    )
+    parser.add_argument(
         "--eval-trace",
         type=str,
         default=None,
@@ -311,6 +319,12 @@ def main() -> None:
         specs = [s for s in specs if s.treatment_id == args.filter_treatment]
         if not specs:
             print(f"[WARN] No runs found for treatment {args.filter_treatment} in manifest")
+            sys.exit(0)
+
+    if args.filter_split is not None:
+        specs = [s for s in specs if s.split_id == args.filter_split]
+        if not specs:
+            print(f"[WARN] No runs found for split {args.filter_split} in manifest")
             sys.exit(0)
 
     if args.limit_runs is not None:

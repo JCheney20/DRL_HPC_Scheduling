@@ -154,6 +154,101 @@ final save, holding scratch to ~60 × 2 GB ≈ 120 GB of models. (Equivalent laz
 option, not taken so mid-run checkpoints still exist for inspection: don't write
 the intermediates at all.)
 
+## Results interpretation and future options (physical_job, dev70, 10 seeds)
+
+These notes are for the results/discussion and future-work sections. They record
+how to read the `baseline_comparison.csv` output and which levers are worth
+pulling before the deeplearn sweep is judged.
+
+### Masking is the dominant factor; masked PPO reaches heuristic parity
+
+Across the six DRL treatments, **action masking is the single largest determinant
+of quality**. In eval the masked variants finish the trace in ≈76k–91k decision
+steps; the non-masked `dqn`/`a2c` take ≈591k — 6–8× more — because without a mask
+the policy repeatedly selects invalid actions (negative-reward no-ops that don't
+advance a placement), and their episode reward is ≈ −800k vs the masked ≈ −170.
+This is not under-training: it is the absence of masking in a large discrete
+action space, and more steps do not fix it. The non-masked RL rows therefore
+function as a **masking ablation** ("masking is necessary"), not as competitive
+baselines. Within the masked variants the ordering is the textbook PPO > DQN > A2C;
+`maskable_ppo` is the strongest and the only DRL treatment that is baseline-competitive.
+
+### `maskable_ppo` vs the heuristics: parity-minus on averages, a tail win
+
+Against the strongest baseline (LCFS) `maskable_ppo` lands **within ~9% on average
+waiting** (2243 vs 2052), ~27% on `avg_slowdown` (7.49 vs 5.90), ~2% on turnaround,
+ties on `max_waiting` (69126 vs 63993, **not** significant, p=0.19), and **beats all
+three baselines on `max_slowdown`** (2918 vs 3092, significant). So the headline is
+**heuristic-competitive with a worst-case-slowdown advantage**, not an outright win —
+a defensible result on its own, especially paired with the ablation showing the other
+algorithms collapse.
+
+Two interpretation cautions for the writeup:
+
+- **`p=0.001953` is the *smallest possible* two-sided Wilcoxon signed-rank p at
+  n=10** (`(1/2)^9`). It means all 10 seeds fell on the same side — i.e. the gap is
+  perfectly *consistent*, not that it is *large*. Effect sizes here are small
+  (~9% on waiting). Do not let "significantly worse" read as a rout; report the
+  effect size alongside the p-value.
+- The **loss on averages but win on the tail** is the signature of a
+  **reward-alignment** ceiling: the agent optimizes its shaped reward, which tracks
+  worst-case slowdown better than mean waiting. This shapes the future-work options below.
+
+### Is 3M timesteps the limiter? Probably a ceiling, not a budget shortfall
+
+The instinct is to blame the training budget, but three signals point to a
+**converged ceiling** rather than under-training: (1) the tight, all-seeds-agree
+consistency above (under-training usually shows high seed variance, not a
+reproducible small gap); (2) the average-loss/tail-win split, which is a
+reward-proxy artifact that more steps only *reinforce*; (3) the policy is already
+well-behaved (no starvation, `max_waiting ≈ baseline`), not stuck in a degenerate
+basin exploration would escape.
+
+**A config wrinkle makes "just add steps" non-trivial.** `learning_rate` is
+`linear_3e-4` — linear decay from 3e-4 **to 0 over the horizon**. So (a) by 3M the
+LR is ≈0 and a flat end-of-curve is *partly forced*, making "plateaued" ambiguous
+(converged vs. LR exhausted); and (b) resuming the 3M checkpoint to 6M does **not**
+behave like more training — the LR is already 0. Testing a larger budget requires
+setting the horizon to 6M/10M and **retraining from scratch** (which re-stretches
+the schedule, holding a higher LR longer early) — a different, 2–3×-cost run, not
+an extension.
+
+**How to decide before spending the compute:** read one representative (median)
+seed's TensorBoard — `ep_rew_mean` slope over 2M→3M (still rising ⇒ budget could
+help; flat ⇒ it won't), `entropy_loss` (collapsed early ⇒ committed policy),
+`explained_variance` (low ⇒ the value function, not steps, is the bottleneck).
+Then the cheapest decisive test is **2–3 seeds at 6M**, fresh, compared against the
+3M seeds; if the gap doesn't move, budget is ruled out. Expectation given the
+signature above: 6M/10M yields *marginal* movement, and the higher-leverage levers
+are **reward shaping** (align the reward with mean waiting/slowdown, not just the
+tail) and **observation features** — not raw steps.
+
+### Why deeplearn is the more promising regime for DRL
+
+The two traces differ structurally in a way that matters: physical_job baselines
+report `gpu_utilization = 0.000` (a **single-resource, CPU-only** placement
+problem), whereas deeplearn_job baselines report `gpu_utilization ≈ 0.261` — GPU is
+a **real, contended** dimension. LCFS/SJF/UNICEP are myopic single-key heuristics
+that cannot reason about joint CPU+GPU packing; on a CPU-only trace they are already
+near-optimal, leaving a learned policy almost no headroom (exactly the parity we see).
+The hypothesis for the paper: **DRL's advantage should scale with the resource-packing
+complexity of the workload**, and deeplearn (CPU+GPU contention) is the
+harder-to-heuristic regime where a learned policy has an axis to exploit.
+
+- **Floor case (worst case):** if the GPU dimension buys nothing and DRL keeps the
+  *same relative* gap as on physical, projecting the physical gaps onto deeplearn's
+  LCFS baseline gives ≈940 avg_waiting (vs 860), ≈4.47 avg_slowdown (vs 3.52), and a
+  persistent ~6% `max_slowdown` win — i.e. the identical parity-minus-with-tail-edge
+  story at deeplearn's lower absolute scale. This is the *floor*, not the expectation.
+- Note deeplearn is absolutely lighter-loaded (baseline slowdown ~3.5 vs 5.9,
+  waiting ~860 vs 2052), so comparisons must be **relative**; do not compare
+  physical DRL's absolute numbers against deeplearn baselines (different workloads —
+  the magnitudes are set by the trace, not the policy).
+- If deeplearn DRL *does* win, confirm the win **concentrates on GPU-contended /
+  multi-resource jobs** rather than being uniform, so the mechanism is credible
+  rather than lucky. Diagnose the budget/ceiling question **separately per trace** —
+  the physical headroom finding does not transfer to deeplearn.
+
 ## Reproducibility niceties
 
 - `PYTHONUNBUFFERED=1` is exported in the train rule so a hard crash (e.g. an
