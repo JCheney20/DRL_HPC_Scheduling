@@ -31,6 +31,15 @@ deterministic name, so a --force re-run replaces its predecessor instead of
 leaving a second file for baseline_aggregate's glob to trip over (see
 metrics_stem).
 
+Backfill is a run *configuration*, not a property of the algorithm: ``--no-backfill``
+runs the same heuristic with HPCsim's backfill sweep disabled, which is the
+configuration that actually matches the MDP the DRL treatments and the N27
+control are evaluated on (``HPCsim.step()`` never backfills). It lands under its
+own treatment_id -- ``{algo}__mask_false__nobf`` -- so the two configurations
+coexist in one manifest, one result directory and one baseline_summary.csv
+rather than overwriting each other. See src/naming.heuristic_treatment_id for
+why the with-backfill id is deliberately left unchanged.
+
 Use baseline_aggregate.py to fold these into baseline_summary.csv (per-trace,
 no seed averaging needed -- a deterministic algorithm has exactly one value),
 and baseline_compare.py to test a specific best-DRL-vs-best-baseline pair via
@@ -45,7 +54,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.HPCsim.HPCsim import HPCsim
-from src.naming import metrics_stem
+from src.naming import heuristic_treatment_id, metrics_stem
 from src.utils import (
     PARTITION_CONFIGS,
     RANDOM_ALGORITHM,
@@ -61,12 +70,18 @@ from src.utils import (
 # into every heuristic invocation, which needs neither.
 
 
-def run_one(row: dict, run_id: str, partition: str, result_dir: Path) -> None:
+def run_one(
+    row: dict,
+    run_id: str,
+    partition: str,
+    result_dir: Path,
+    backfill: bool = True,
+) -> None:
     algorithm = str(row["algorithm"])
     trace_file = str(row["trace_file"])
     allocator = "best_fit"
     split_id = row["split_id"]
-    treatment_id = f"{algorithm}__mask_false"
+    treatment_id = heuristic_treatment_id(algorithm, backfill)
     result_dir.mkdir(parents=True, exist_ok=True)
     stem = metrics_stem(treatment_id, str(split_id))
     out_csv = result_dir / f"{stem}_metrics.csv"
@@ -76,24 +91,30 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: Path) -> None:
     env = HPCsim(
         scheduler=algorithm,
         allocator=allocator,
-        backfill_enable=True,
+        # Off is the CONTROLLED configuration: HPCsim.step(), the MDP the DRL
+        # treatments and the N27 random control run on, never calls
+        # Scheduler.backfill(), so a backfilling heuristic and a DRL agent are
+        # not the same experiment. See src/naming.heuristic_treatment_id.
+        backfill_enable=backfill,
         topology_file=str(row["topology_file"]),
         node_file=str(row["node_file"]),
         trace_file=trace_file,
         partition=partition,
         random_job=False,
+        # The utilisation-trace filename is otherwise derived from (scheduler,
+        # allocator) alone, so the two backfill configurations of one heuristic
+        # -- and the same heuristic on a second split -- would all write to the
+        # same path. stem is unique per (treatment_id, split_id), which is
+        # exactly the identity of the measurement.
+        result_tag=stem,
     )
 
     env.run()
-    # HPCsim.run() always writes to a fixed "result/{algo}+{allocator}.csv"
-    # regardless of the caller's result_dir -- move it into place immediately
-    # after the run completes (not deferred), since two concurrent baseline
-    # runs for the SAME algorithm on DIFFERENT traces would otherwise race
-    # on this fixed path if ever parallelised. (See HPCsim.run(): the source
-    # path is hardcoded inside HPCsim itself, not something run_baseline.py
-    # can pass in -- this rename is the only mitigation available here.)
-    fixed_source_path = Path(f"result/{algorithm}+{allocator}.csv")
-    fixed_source_path.replace(out_csv.with_suffix(".raw.csv"))
+    # HPCsim.run() writes to a fixed path under result/ regardless of the
+    # caller's result_dir -- move it into place immediately after the run
+    # completes (not deferred), since concurrent baseline runs would otherwise
+    # leave stray files behind under a shared result/ directory.
+    Path(env.run_result_path()).replace(out_csv.with_suffix(".raw.csv"))
 
     max_w, avg_w = env.evaluator.waiting_time()
     max_s, avg_s = env.evaluator.bounded_slowdown()
@@ -137,7 +158,7 @@ def run_one(row: dict, run_id: str, partition: str, result_dir: Path) -> None:
     write_json(metrics, out_metrics)
 
     print(
-        f"[{partition}] {algorithm} — done "
+        f"[{partition}] {algorithm} (backfill={'on' if backfill else 'off'}) — done "
         f"(avg_wait={avg_w:.1f}s  avg_slowdown={avg_s:.4f}  "
         f"wall={elapsed:.0f}s)"
     )
@@ -231,6 +252,16 @@ def parse_args() -> argparse.Namespace:
         help="Re-run even if this algorithm/split_id is already in the manifest.",
     )
     parser.add_argument(
+        "--no-backfill", dest="backfill", action="store_false", default=True,
+        help="Disable HPCsim's backfill sweep for this heuristic. This is the "
+             "controlled configuration: HPCsim.step() -- the MDP the DRL "
+             "treatments and the random control run on -- never backfills, so "
+             "a backfilling heuristic is not the same experiment. Lands under "
+             "treatment_id '{algo}__mask_false__nobf', so it coexists with the "
+             "with-backfill run rather than replacing it. Rejected for "
+             "--algorithm random, which does not use the heuristic loop at all.",
+    )
+    parser.add_argument(
         "--seed", default=None, type=int, metavar="SEED",
         help="Seed for the stochastic 'random' control. Required for "
              "--algorithm random; rejected for the deterministic heuristics, "
@@ -262,21 +293,37 @@ def parse_args() -> argparse.Namespace:
             f"deterministic, so a seeded rerun would produce an identical row "
             f"and baseline_aggregate would reject it as a duplicate"
         )
+    if args.algorithm == RANDOM_ALGORITHM and not args.backfill:
+        # Silently accepting it would imply the control HAS backfill by default,
+        # which would be exactly backwards: it runs HPCsim.step(), which has no
+        # backfill path to disable.
+        parser.error(
+            "--no-backfill is not valid for --algorithm random: the control "
+            "runs the RL MDP (HPCsim.step), which never backfills in either "
+            "configuration, so there is nothing for the flag to switch off"
+        )
     return args
 
 
 def main() -> None:
     args = parse_args()
     is_random = args.algorithm == RANDOM_ALGORITHM
-    treatment_id = RANDOM_TREATMENT_ID if is_random else f"{args.algorithm}__mask_false"
+    treatment_id = (
+        RANDOM_TREATMENT_ID if is_random
+        else heuristic_treatment_id(args.algorithm, args.backfill)
+    )
     trace = f"data/splits/{args.split_id}.tsv"
     manifest_path = Path(args.manifest_path)
     result_path = Path(args.result_dir)
 
     if manifest_path.exists():
         existing = pd.read_csv(manifest_path)
+        # Matched on treatment_id, not algorithm: the two backfill
+        # configurations of one heuristic share an algorithm and a split, so
+        # matching on algorithm would report the second one as already run and
+        # skip it, leaving the band silently half-populated.
         already_run = existing[
-            (existing["algorithm"] == args.algorithm) & (existing["split_id"] == args.split_id)
+            (existing["treatment_id"] == treatment_id) & (existing["split_id"] == args.split_id)
         ]
         # For the random control the unit of work is (algorithm, split, seed),
         # not (algorithm, split): 10 seeds are 10 legitimately distinct rows,
@@ -288,7 +335,7 @@ def main() -> None:
         if not already_run.empty and not args.force:
             seed_note = f" seed={args.seed}" if is_random else ""
             print(
-                f"[SKIP] {args.algorithm}{seed_note} already in manifest "
+                f"[SKIP] {treatment_id}{seed_note} already in manifest "
                 f"for split_id={args.split_id}"
             )
             return
@@ -324,7 +371,7 @@ def main() -> None:
             max_steps=args.max_steps,
         )
     else:
-        run_one(row, run_id, args.partition, result_path)
+        run_one(row, run_id, args.partition, result_path, backfill=args.backfill)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,33 @@ neither -- the same constraint prune_manifest.py already respects.
 
 from __future__ import annotations
 
+# Backfill is a *confound*, not a property of the heuristic: HPCsim.run() sweeps
+# the whole queue for backfillable jobs and holds a reservation for the head job,
+# whereas HPCsim.step() -- the MDP the DRL treatments and the N27 random control
+# are evaluated on -- has no such sweep. Comparing a backfilling heuristic against
+# a non-backfilling agent measures the two together. So the heuristics are run in
+# BOTH configurations and reported as two bands: backfill=off is the controlled
+# comparison (same mechanism on both sides of the table), backfill=on is the
+# production reference (what a real scheduler would actually do).
+#
+# The two configurations are the same `algorithm` with different treatment_ids,
+# which is what keeps them apart in the manifest, in baseline_aggregate's
+# duplicate check (keyed on treatment_id) and in its per-treatment grouping.
+# Anything downstream that selects a baseline by `algorithm` ALONE is ambiguous
+# once both bands exist and must select on treatment_id instead.
+NO_BACKFILL_SUFFIX = "__nobf"
+
+
+def heuristic_treatment_id(algorithm: str, backfill: bool = True) -> str:
+    """treatment_id for one deterministic heuristic in one backfill configuration.
+
+    The backfill=on id is left EXACTLY as it was (``{algo}__mask_false``) so the
+    already-completed with-backfill runs keep their identity and do not have to
+    be re-run or migrated; only the new configuration takes a suffix.
+    """
+    base = f"{algorithm}__mask_false"
+    return base if backfill else base + NO_BACKFILL_SUFFIX
+
 
 def metrics_stem(treatment_id: str, split_id: str, seed: int | None = None) -> str:
     """Deterministic basename for one baseline's metrics files.
