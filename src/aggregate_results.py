@@ -111,11 +111,37 @@ def check_key_uniqueness(df: pd.DataFrame, key_cols: list[str], context: str) ->
 # ---------------------------------------------------------------------------
 
 
+def attach_truncation_columns(
+    eval_wide: pd.DataFrame, summary: pd.DataFrame, keys: list[str]
+) -> pd.DataFrame:
+    """Carry per-run truncation status up into a grouped summary.
+
+    A truncated run's metrics cover only the jobs that completed before the
+    hang guard stopped it, so they must never be compared against full-trace
+    runs. Aggregation is where that fact would otherwise be lost: the mean of a
+    partial-trace run and a full-trace run is just a number, with nothing left
+    to say one of the inputs was invalid.
+
+    `truncated` is aggregated with `any` (one bad seed taints the treatment) and
+    `jobs_completed` with `min` (the worst seed says how far short it fell).
+    Both are absent from eval CSVs written before the flag existed; those are
+    left unflagged here and caught instead by select_best's implied-runtime
+    check, which needs no new columns.
+    """
+    if "truncated" not in eval_wide.columns:
+        return summary
+    agg: dict[str, tuple[str, str]] = {"truncated_any": ("truncated", "any")}
+    if "jobs_completed" in eval_wide.columns:
+        agg["jobs_completed_min"] = ("jobs_completed", "min")
+    flags = eval_wide.groupby(keys).agg(**agg).reset_index()
+    return summary.merge(flags, on=keys, how="left")
+
+
 def aggregate_seed_summary(eval_wide: pd.DataFrame) -> pd.DataFrame:
     df = eval_wide[GROUP_KEYS + CORE_METRICS]
     df = df.groupby(GROUP_KEYS).agg(["mean", "std"])
     df.columns = ["_".join(col) for col in df.columns]
-    return df.reset_index()
+    return attach_truncation_columns(eval_wide, df.reset_index(), GROUP_KEYS)
 
 
 def aggregate_algorithm_summary(seed_summary: pd.DataFrame) -> pd.DataFrame:

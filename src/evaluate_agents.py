@@ -271,6 +271,22 @@ def evaluate_one_run(
             print(msg, flush=True)
 
     eval_wall_s = time.perf_counter() - t_start
+
+    if truncated:
+        # Loud, because every metric below is now averaged over a partial trace.
+        # An unmasked policy stalls once the event queue empties: simulated time
+        # cannot advance, so the observation is identical on every subsequent
+        # step and a deterministic policy repeats the same invalid action for
+        # ever. The hang guard turns that non-terminating loop into a bounded
+        # stop -- it does not rescue the run.
+        print(
+            f"[{spec.run_id}] *** TRUNCATED *** episode stopped by the hang guard "
+            f"after {n_steps} decisions with {len(env.evaluator.completed_job)} jobs "
+            f"completed. Metrics cover a PARTIAL trace and are not comparable with "
+            f"full-trace runs; select_best will refuse this treatment.",
+            flush=True,
+        )
+
     max_w, avg_w = safe_metric_access(
         env.evaluator.waiting_time, (0.0, 0.0), "waiting_time"
     )
@@ -306,6 +322,8 @@ def evaluate_one_run(
         avg_turnaround=float(avg_t),
         cpu_utilization=float(cpu_util),
         gpu_utilization=float(gpu_util),
+        truncated=bool(truncated),
+        jobs_completed=len(env.evaluator.completed_job),
         timestamp_utc=datetime.now(timezone.utc).isoformat(),
     )
 
