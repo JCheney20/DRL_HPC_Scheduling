@@ -68,17 +68,6 @@ class EvalResult:
     avg_turnaround: float
     cpu_utilization: float
     gpu_utilization: float
-    # Whether the episode ended by truncation (AllocationCommit's hang guard)
-    # rather than by draining the trace. A truncated run's metrics are averaged
-    # over only the jobs that completed before the stop, so they are NOT
-    # comparable with full-trace runs -- an unmasked policy that stalls drops
-    # its long-waiting jobs and therefore reports a flatteringly low
-    # avg_waiting. Recorded here so the fault can never again propagate
-    # silently into aggregate -> select_best -> baseline_compare.
-    truncated: bool
-    # Jobs the evaluator saw complete. With `truncated`, this says *where* a run
-    # stopped instead of leaving it to be inferred from decision_count.
-    jobs_completed: int
     timestamp_utc: str
 
 

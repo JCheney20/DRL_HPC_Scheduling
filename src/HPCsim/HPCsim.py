@@ -219,19 +219,11 @@ class HPCsim(gym.Env):
                  window_size=100,
                  tail_size=0,
                  seed=None,
-                 random_job=False,
-                 result_tag=None):
+                 random_job=False):
         self.current_valid_job = None
         self.scheduler_factor = scheduler
         self.allocator_factor = allocator
         self.backfill_enable = backfill_enable
-        # run() writes its utilisation trace to a path derived from
-        # (scheduler, allocator) only, so two runs that differ in any OTHER
-        # setting -- backfill on/off, or the same heuristic on a second trace --
-        # collide on it. result_tag is appended to that filename so callers can
-        # make the path unique; None keeps the original name for every existing
-        # caller. See run() and run_baseline.run_one().
-        self.result_tag = result_tag
         self.topology_file = topology_file
         self.node_file = node_file
         self.trace_file = trace_file
@@ -429,17 +421,7 @@ class HPCsim(gym.Env):
             self.forward_system_time()
         end = time.time()
         print(f"Running time: {end - start:.4f} seconds")
-        pd.DataFrame(self.result_dict).to_csv(self.run_result_path(), index=False)
-
-    def run_result_path(self):
-        """Path run() writes its utilisation trace to.
-
-        Exposed as a method so a caller that needs to move the file afterwards
-        can ask for the path rather than reconstructing the format string and
-        drifting from it.
-        """
-        tag = f'+{self.result_tag}' if self.result_tag else ''
-        return f'result/{self.scheduler_factor}+{self.allocator_factor}{tag}.csv'
+        pd.DataFrame(self.result_dict).to_csv(f'result/{self.scheduler_factor}+{self.allocator_factor}.csv', index=False)
 
     def forward_system_time(self):
         next_system_time = list(self.event_queue.items())[0][0]
@@ -548,12 +530,8 @@ class HPCsim(gym.Env):
             self.scheduler_factor = scheduler
         if allocator:
             self.allocator_factor = allocator
-        # `is not None`, and the real attribute: `self.backfill_factor` is read
-        # nowhere (job_schedule_allocation tests `self.backfill_enable`), so this
-        # branch used to be a silent no-op, and a truthiness test would in any
-        # case have swallowed the one value worth passing -- False.
-        if backfill_enable is not None:
-            self.backfill_enable = backfill_enable
+        if backfill_enable:
+            self.backfill_factor = backfill_enable
         self.evaluator.reset(scheduler, allocator, resource=self.cluster.resource, time=self.time)
         self.scheduler = Scheduler(default=self.scheduler_factor)
         self.allocator = Allocator(default=self.allocator_factor)

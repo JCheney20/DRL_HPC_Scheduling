@@ -137,22 +137,6 @@ HOLDOUT_SPLIT = f"data/splits/{HOLDOUT_ID}.tsv"
 SPLIT_META = f"data/splits/logs/{TRACE_NAME}_r70.json"
 
 TRAD_ALGORITHMS_STR = " ".join(TRAD_ALGORITHMS)
-
-# Backfill configurations for the heuristics. "off" is the controlled
-# comparison (matches HPCsim.step(), which never backfills), "on" the
-# production reference; each is a distinct treatment_id, so both land in one
-# baseline_summary.csv. See config.yaml and src/naming.heuristic_treatment_id.
-VALID_BACKFILL_MODES = ["on", "off"]
-BACKFILL_MODES = [
-    m for m in config.get("heuristic_backfill_modes", ["on"])
-    if m in VALID_BACKFILL_MODES
-]
-if not BACKFILL_MODES:
-    raise ValueError(
-        "config heuristic_backfill_modes must contain at least one of "
-        f"{VALID_BACKFILL_MODES}, got {config.get('heuristic_backfill_modes')}"
-    )
-BACKFILL_MODES_STR = " ".join(BACKFILL_MODES)
 EVAL_MAX_STEPS_FLAG = f"--max-steps {EVAL_MAX_STEPS}" if EVAL_MAX_STEPS else ""
 
 PARETO_METRICS = config["pareto_metrics"]
@@ -571,25 +555,20 @@ rule baseline:
         output_dir=f"result/{TRACE_NAME}/baseline",
         manifest_path="logs/baseline_run_log.csv",
         algorithms=TRAD_ALGORITHMS_STR,
-        backfill_modes=BACKFILL_MODES_STR,
         split_id=SPLIT_ID,
         partition=PARTITION,
     shell:
         """
         set -e
         for algo in {params.algorithms}; do
-          for bf in {params.backfill_modes}; do
-            if [ "$bf" = "off" ]; then bf_flag="--no-backfill"; else bf_flag=""; fi
-            python -m src.run_baseline \
-                --algorithm "$algo" \
-                $bf_flag \
-                --split_id {params.split_id} \
-                --partition {params.partition} \
-                --result-dir {params.output_dir} \
-                --manifest-path {params.manifest_path} \
-                --force \
-                >> {log} 2>&1 &
-          done
+          python -m src.run_baseline \
+              --algorithm "$algo" \
+              --split_id {params.split_id} \
+              --partition {params.partition} \
+              --result-dir {params.output_dir} \
+              --manifest-path {params.manifest_path} \
+              --force \
+              >> {log} 2>&1 &
         done
         wait
         touch {output.baseline_meta}
@@ -718,17 +697,12 @@ rule baseline_holdout:
     log: f"logs/snakemake/{TRACE_NAME}/baseline_holdout.log"
     resources:
         mem_mb=8000,
-        # Raised from 240: without backfill the queue drains far more slowly
-        # (head-of-line blocking is no longer relieved), so the no-backfill
-        # pass is the long pole and it now runs in the same job as the
-        # with-backfill one.
-        runtime=480,
+        runtime=240,
         slurm_partition="main",
     params:
         output_dir=HOLDOUT_BASELINE_DIR,
         manifest_path="logs/baseline_run_log.csv",
         algorithms=TRAD_ALGORITHMS_STR,
-        backfill_modes=BACKFILL_MODES_STR,
         split_id=HOLDOUT_ID,
         partition=PARTITION,
     shell:
@@ -737,18 +711,14 @@ rule baseline_holdout:
         export GIT_COMMIT="{GIT_COMMIT}"
         export PYTHONUNBUFFERED=1
         for algo in {params.algorithms}; do
-          for bf in {params.backfill_modes}; do
-            if [ "$bf" = "off" ]; then bf_flag="--no-backfill"; else bf_flag=""; fi
-            python -m src.run_baseline \
-                --algorithm "$algo" \
-                $bf_flag \
-                --split_id {params.split_id} \
-                --partition {params.partition} \
-                --result-dir {params.output_dir} \
-                --manifest-path {params.manifest_path} \
-                --force \
-                >> {log} 2>&1 &
-          done
+          python -m src.run_baseline \
+              --algorithm "$algo" \
+              --split_id {params.split_id} \
+              --partition {params.partition} \
+              --result-dir {params.output_dir} \
+              --manifest-path {params.manifest_path} \
+              --force \
+              >> {log} 2>&1 &
         done
         wait
         """

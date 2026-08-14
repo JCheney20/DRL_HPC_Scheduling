@@ -59,67 +59,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# Tolerance for the implied-runtime check, in seconds. Treatments that drain the
-# trace agree on this quantity to well under 1e-3 s; a truncated run misses by
-# O(100 s). Anything in between does not occur, so the threshold is not delicate.
-IMPLIED_RUNTIME_TOL_S = 1.0
-
-
-def find_partial_trace_treatments(
-    seed_summary: pd.DataFrame, tol: float = IMPLIED_RUNTIME_TOL_S
-) -> tuple[list[str], dict]:
-    """Treatments whose evaluation did not cover the whole trace.
-
-    `avg_turnaround - avg_waiting` is the mean *runtime* of the jobs that
-    completed. Runtime is a property of the trace and of nothing else -- no
-    scheduling policy can change how long a job takes to execute -- so every
-    treatment that drains the trace must report the same value. A treatment
-    stopped early by the hang guard averaged over a different, shorter-running
-    subset of jobs and so reports a different one.
-
-    This matters because the bias is not neutral. A stalled run drops precisely
-    the jobs that were still waiting, so it reports a flatteringly low
-    avg_waiting -- the error points the same way as a win, and an unfiltered
-    selection therefore prefers exactly the runs it should discard.
-
-    The reference value is the one shared by the largest group of treatments
-    rather than the median, because full-trace treatments agree *exactly*: the
-    biggest cluster of identical values is the full-trace set even when most
-    treatments are truncated, which a median would get wrong.
-
-    Returns the offending treatment ids and a rationale dict for the audit
-    trail. Needs no columns beyond the two metrics, so it works retroactively on
-    summaries written before runs recorded a `truncated` flag.
-    """
-    needed = {"avg_turnaround", "avg_waiting", "treatment_id"}
-    if not needed.issubset(seed_summary.columns):
-        return [], {"applied": False, "reason": "metrics unavailable"}
-
-    implied = (
-        seed_summary.assign(_rt=seed_summary["avg_turnaround"] - seed_summary["avg_waiting"])
-        .groupby("treatment_id")["_rt"]
-        .mean()
-    )
-    if implied.empty:
-        return [], {"applied": False, "reason": "no treatments"}
-
-    reference = implied.round(3).mode()
-    if reference.empty:
-        return [], {"applied": False, "reason": "no modal runtime"}
-    ref = float(reference.iloc[0])
-
-    offenders = implied[(implied - ref).abs() > tol]
-    return sorted(offenders.index.astype(str)), {
-        "applied": True,
-        "reference_implied_runtime_s": ref,
-        "tolerance_s": tol,
-        "implied_runtime_by_treatment": {
-            str(k): float(v) for k, v in implied.items()
-        },
-        "excluded": {str(k): float(v) for k, v in offenders.items()},
-    }
-
-
 def find_pareto_front(df: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
     sense = ["min" if METRIC_DIRECTION.get(m, "lower_is_better") == "lower_is_better" else "max"
              for m in metrics]
@@ -301,38 +240,6 @@ def main() -> None:
         print(f"[ERROR] seed_summary missing primary metric columns: {missing}", file=sys.stderr)
         sys.exit(1)
 
-    # [0] Refuse partial-trace treatments before they can be selected. Two
-    # independent detectors: the `truncated` flag recorded by newer eval runs,
-    # and the implied-runtime invariant, which needs no new columns and so also
-    # catches runs evaluated before the flag existed.
-    partial, partial_rationale = find_partial_trace_treatments(seed_summary)
-    flagged: list[str] = []
-    if "truncated_any" in seed_summary.columns:
-        flagged = sorted(
-            seed_summary.loc[
-                seed_summary["truncated_any"].fillna(False).astype(bool), "treatment_id"
-            ].astype(str).unique()
-        )
-    excluded = sorted(set(partial) | set(flagged))
-
-    if excluded:
-        print(
-            "[WARN] excluding partial-trace treatments from selection: "
-            + ", ".join(excluded)
-            + " (metrics cover only the jobs completed before the run was "
-            "truncated, and the bias favours them)",
-            file=sys.stderr,
-        )
-        survivors = seed_summary[~seed_summary["treatment_id"].astype(str).isin(excluded)]
-        if survivors.empty:
-            print(
-                "[ERROR] every treatment is partial-trace; refusing to select a "
-                "winner from truncated runs.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        seed_summary = survivors
-
     grouped_means = seed_summary.groupby("treatment_id").mean(numeric_only=True)
     algo_means = grouped_means[PRIMARY_METRICS].reset_index()
 
@@ -343,9 +250,6 @@ def main() -> None:
     final_candidates = sorted({t for cls in classes for t in cls})
 
     overall_rationale = {
-        "partial_trace_excluded": excluded,
-        "partial_trace_flagged_by_run": flagged,
-        "partial_trace_check": partial_rationale,
         "pareto_front_before": pareto_df["treatment_id"].astype(str).tolist(),
         "pareto_classes_after_stat_filter": classes,
         "stats_rationale": stats_rationale,

@@ -41,18 +41,6 @@ trad_algorithms:
   # - "f_1"
   # - "f_2"
 
-# Backfill configurations to run each heuristic in. Backfill is a confound, not
-# a property of the algorithm: HPCsim.run() sweeps the queue for backfillable
-# jobs and reserves the head job's start time, whereas HPCsim.step() -- the MDP
-# the DRL treatments and the random control are evaluated on -- has no such
-# sweep. Running "off" gives the controlled comparison (same mechanism on both
-# sides of the table); "on" is kept as the production reference (what a real
-# scheduler would do). Each mode is its own treatment_id, so both coexist in
-# baseline_summary.csv. Drop to ["on"] for the pre-existing single-band results.
-heuristic_backfill_modes:
-  - "off"
-  - "on"
-
 # Uniform-random-over-valid-actions control (reviewer item N27). Not a
 # heuristic and deliberately not in trad_algorithms: it runs the RL MDP, not
 # HPCsim.run(), so that it controls for policy quality and nothing else. It is
