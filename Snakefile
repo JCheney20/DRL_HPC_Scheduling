@@ -120,6 +120,10 @@ ALPHA = config["alpha"]
 EVAL_MAX_STEPS = config.get("eval_max_steps", None)
 EVAL_DETERMINISTIC = config.get("eval_deterministic", True)
 BASELINE_ONLY = config.get("baseline_only", False)
+# N27 uniform-random-over-valid-actions control. Reuses SEEDS: the control is
+# stochastic, and matching the DRL seed set keeps the two sides' +/- terms
+# comparable. Off only if you deliberately want the pre-N27 baseline set back.
+RANDOM_CONTROL = config.get("random_control", True)
 N_ENVS = config.get("n_envs", 1)     # SubprocVecEnv workers for PPO/A2C
 BATCH_SIZE = config.get("batch_size", 2048)  # minibatch size for PPO/DQN gradient updates
 N_EPOCHS = config.get("n_epochs", 5)         # PPO optimisation epochs per rollout
@@ -156,6 +160,7 @@ REQUIRED_SCRIPTS = [
     "src/train_agents.py", "src/evaluate_agents.py", "src/aggregate_results.py",
     "src/statistical_test.py", "src/run_baseline.py", "src/baseline_aggregate.py",
     "src/baseline_compare.py", "src/select_best.py", "src/visualise.py",
+    "src/random_control.py",
 ]
 for script in REQUIRED_SCRIPTS:
     if not Path(script).exists():
@@ -170,7 +175,10 @@ localrules:
 
 if BASELINE_ONLY:
     rule all:
-        input: f"result/{TRACE_NAME}/baseline/baseline_summary.csv"
+        input:
+            f"result/{TRACE_NAME}/baseline/baseline_summary.csv",
+            # M5a: the heuristics (and the N27 control) on the holdout split.
+            f"result/{TRACE_NAME}/baseline_holdout/baseline_summary.csv",
 else:
     rule all:
         input:
@@ -178,6 +186,9 @@ else:
             f"result/{TRACE_NAME}/.visualise_complete",
             f"result/{TRACE_NAME}/baseline/baseline_comparison.csv",
             f"result/{TRACE_NAME}/holdout/holdout_summary.csv",
+            # M5a: out-of-sample baselines, so the DRL-vs-heuristic margin can be
+            # compared in-sample against out-of-sample rather than argued.
+            f"result/{TRACE_NAME}/baseline_holdout/baseline_summary.csv",
 
 # =============================================================================
 # RULE make_split
@@ -429,23 +440,37 @@ rule select_best:
 
 rule holdout_eval:
     input:
+        # ORDERING DEPENDENCY — do not remove because the winner is no longer
+        # read here (reviewer item M5b). best_algorithm.json is produced by
+        # select_best, which depends on aggregate, which depends on every
+        # train + eval job. It is the only thing that stops Snakemake scheduling
+        # a holdout pass against A2C models it is concurrently retraining, which
+        # is exactly the failure "sequence M5b after A2C-7" exists to prevent.
         best_algo_json=f"result/{TRACE_NAME}/best/best_algorithm.json",
         holdout=HOLDOUT_SPLIT,
     output:
-        marker=touch(f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_complete"),
+        marker=touch(f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_{{algo}}_complete"),
     log:
-        f"logs/snakemake/{TRACE_NAME}/holdout_eval_{{seed}}.log",
+        f"logs/snakemake/{TRACE_NAME}/holdout_eval_{{seed}}_{{algo}}.log",
     wildcard_constraints:
         seed=r"\d+",
+        algo="|".join(ALGORITHMS),
     resources:
         mem_mb=8000,
-        # One holdout30 pass per seed (10 seeds run as parallel jobs). Same
-        # forward-pass-bound profile as eval_run, so the same fix: request a GPU
-        # (SB3.load() device="auto" moves inference to CUDA) and raise the ceiling
-        # to the 14 h partition max. Winner is read per job.
+        # ALL SIX treatments now get a holdout pass, not just the Pareto winner
+        # (M5b): 6 x 10 = 60 jobs per trace. Without that, holdout covers one
+        # treatment and M5's six-way ranking has to be argued rather than shown.
+        #
+        # CPU-only. This supersedes the earlier hybrid placement, which sent the
+        # DQN family to a GPU on the theory that ~18 steps/s would not clear the
+        # wall. Measured since: DQN evaluates acceptably on CPU. Since a GPU
+        # request is not needed, not making one is strictly better here — 60 jobs
+        # per trace against the 2-3 typically-free (and shared) GPU nodes would
+        # serialise the whole holdout stage while the 6 CPU-only nodes idle.
+        # runtime stays at the 14 h partition max: eval has no resume, and two
+        # earlier ceiling guesses on this profile each cost a full rerun.
         runtime=840,
         slurm_partition="main",
-        gres="gpu:1",
     params:
         manifest="logs/run_log.csv",
         holdout_root=f"result/{TRACE_NAME}/holdout",
@@ -459,12 +484,11 @@ rule holdout_eval:
         export GIT_COMMIT="{GIT_COMMIT}"
         export PYTHONUNBUFFERED=1
         mkdir -p {params.holdout_root}/runs
-        WINNER=$(python -c "import json; print(json.load(open('{input.best_algo_json}'))['treatment_id'])")
-        echo "Holdout eval: winner=$WINNER seed={wildcards.seed} on {params.holdout_trace}"
+        echo "Holdout eval: algo={wildcards.algo} seed={wildcards.seed} on {params.holdout_trace}"
         python -m src.evaluate_agents \
             --manifest {params.manifest} \
             --output-dir {params.holdout_root} \
-            --filter-treatment "$WINNER" \
+            --filter-algo {wildcards.algo} \
             --filter-seed {wildcards.seed} \
             --filter-split {params.filter_split} \
             --eval-trace {params.holdout_trace} \
@@ -480,9 +504,14 @@ rule holdout_eval:
 
 rule holdout_aggregate:
     input:
+        # seed x algo (M5b). aggregate_results already groups by treatment, so
+        # holdout_summary.csv becomes six rows with no change to that script --
+        # but note the paper's build_holdout() must then select the winner
+        # explicitly instead of taking the first row.
         markers=expand(
-            f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_complete",
+            f"result/{TRACE_NAME}/holdout/.holdout_eval_{{seed}}_{{algo}}_complete",
             seed=SEEDS,
+            algo=ALGORITHMS,
         ),
     output:
         holdout_summary=f"result/{TRACE_NAME}/holdout/holdout_summary.csv",
@@ -546,18 +575,214 @@ rule baseline:
         """
 
 # =============================================================================
+# RULE baseline_random — N27 uniform-random-over-valid-actions control
+#
+# One SLURM job per seed, in parallel. Separate from `baseline` (which runs all
+# the heuristics inside a single job) for two reasons: the heuristics are
+# deterministic single runs of a few minutes each, whereas this is 10 stochastic
+# full-trace MDP rollouts; and fanning them out turns a serial ~5 h into ~30 min
+# of wall time on nodes that would otherwise be idle.
+#
+# CPU-only by design: this policy has no network, so unlike the eval_run rule
+# there is no forward pass to accelerate and a GPU request would only queue the
+# job behind the 2-3 contended GPU nodes for no gain.
+# =============================================================================
+
+rule baseline_random:
+    input:
+        dev_split=DEV_SPLIT,
+        split_meta=SPLIT_META,
+    output:
+        marker=touch(f"result/{TRACE_NAME}/baseline/.random_seed_{{seed}}_complete"),
+    log: f"logs/snakemake/{TRACE_NAME}/baseline_random_{{seed}}.log"
+    wildcard_constraints:
+        seed=r"\d+",
+    resources:
+        mem_mb=8000,
+        # 14 h partition max, same as eval_run. The rollout should finish far
+        # inside it (no policy forward pass, so it is env-bound rather than
+        # memory-bandwidth-bound), but two earlier ceilings on the eval rule
+        # were guessed too low and SIGKILL discarded the buffered stdout,
+        # leaving empty logs indistinguishable from a hang. An unused ceiling
+        # costs nothing; a short one costs a rerun.
+        runtime=840,
+        slurm_partition="main",
+    params:
+        output_dir=f"result/{TRACE_NAME}/baseline",
+        manifest_path="logs/baseline_run_log.csv",
+        split_id=SPLIT_ID,
+        partition=PARTITION,
+        window_size=WINDOW_SIZE,
+        tail_size=TAIL_SIZE,
+        # Shares eval_max_steps with the DRL evals: the control IS an eval, so
+        # the smoke config's cap has to apply to it too or `just run_smoke`
+        # would sit through a full-trace rollout. Unset (null) in config.yaml,
+        # i.e. the production run is uncapped, as the DRL evals are.
+        max_steps_flag=EVAL_MAX_STEPS_FLAG,
+    shell:
+        """
+        set -e
+        export GIT_COMMIT="{GIT_COMMIT}"
+        export PYTHONUNBUFFERED=1
+        python -m src.run_baseline \
+            --algorithm random \
+            --seed {wildcards.seed} \
+            {params.max_steps_flag} \
+            --split_id {params.split_id} \
+            --partition {params.partition} \
+            --window-size {params.window_size} \
+            --tail-size {params.tail_size} \
+            --result-dir {params.output_dir} \
+            --manifest-path {params.manifest_path} \
+            --force \
+            >> {log} 2>&1
+        """
+
+# =============================================================================
 # RULE baseline_aggregate
 # =============================================================================
 
 rule baseline_aggregate:
     input:
         baseline_meta=f"result/{TRACE_NAME}/baseline/baseline_metadata.json",
+        random_markers=(
+            expand(
+                f"result/{TRACE_NAME}/baseline/.random_seed_{{seed}}_complete",
+                seed=SEEDS,
+            )
+            if RANDOM_CONTROL else []
+        ),
     output:
         baseline_summary=f"result/{TRACE_NAME}/baseline/baseline_summary.csv",
         baseline_eval_wide=f"result/{TRACE_NAME}/baseline/baseline_eval_wide.csv",
     log: f"logs/snakemake/{TRACE_NAME}/baseline_aggregate.log"
     params:
         result_dir=f"result/{TRACE_NAME}/baseline",
+    shell:
+        """
+        python -m src.baseline_aggregate \
+            --result-dir {params.result_dir} \
+            --output {output.baseline_summary} \
+            >> {log} 2>&1
+        """
+
+# =============================================================================
+# RULES baseline_holdout* — the same baselines on the HOLDOUT split (M5a)
+#
+# `baseline_summary.csv` currently carries split_id = <trace>_dev70 for all
+# three heuristics, so the DRL-vs-heuristic margin has only ever been measured
+# in-sample. M5's defence needs that margin measured out-of-sample too: if
+# MaskablePPO is +9.3% vs LCFS on dev and ~+9% on holdout, the in-sample
+# advantage demonstrably did not inflate the comparison.
+#
+# Note the raw dev-vs-holdout *values* do not transfer and must not be compared
+# directly — the splits are different workloads (physical: 58,894 dev jobs vs
+# 25,241 holdout) and on deeplearn the metrics move the opposite way. What
+# transfers is the margin. Hence: same baselines, same code, second split.
+#
+# Written to their OWN directory. baseline_aggregate globs *_metrics.csv per
+# directory, so writing these beside the dev rows would produce a six-row
+# baseline_summary.csv and make every downstream selector that matches on
+# `algorithm` alone (build_main, build_cost) silently ambiguous.
+# =============================================================================
+
+HOLDOUT_BASELINE_DIR = f"result/{TRACE_NAME}/baseline_holdout"
+
+rule baseline_holdout:
+    input:
+        holdout=HOLDOUT_SPLIT,
+        split_meta=SPLIT_META,
+    output:
+        marker=touch(f"{HOLDOUT_BASELINE_DIR}/.heuristics_complete"),
+    log: f"logs/snakemake/{TRACE_NAME}/baseline_holdout.log"
+    resources:
+        mem_mb=8000,
+        runtime=240,
+        slurm_partition="main",
+    params:
+        output_dir=HOLDOUT_BASELINE_DIR,
+        manifest_path="logs/baseline_run_log.csv",
+        algorithms=TRAD_ALGORITHMS_STR,
+        split_id=HOLDOUT_ID,
+        partition=PARTITION,
+    shell:
+        """
+        set -e
+        export GIT_COMMIT="{GIT_COMMIT}"
+        export PYTHONUNBUFFERED=1
+        for algo in {params.algorithms}; do
+          python -m src.run_baseline \
+              --algorithm "$algo" \
+              --split_id {params.split_id} \
+              --partition {params.partition} \
+              --result-dir {params.output_dir} \
+              --manifest-path {params.manifest_path} \
+              --force \
+              >> {log} 2>&1 &
+        done
+        wait
+        """
+
+rule baseline_holdout_random:
+    input:
+        holdout=HOLDOUT_SPLIT,
+        split_meta=SPLIT_META,
+    output:
+        marker=touch(f"{HOLDOUT_BASELINE_DIR}/.random_seed_{{seed}}_complete"),
+    log: f"logs/snakemake/{TRACE_NAME}/baseline_holdout_random_{{seed}}.log"
+    wildcard_constraints:
+        seed=r"\d+",
+    resources:
+        mem_mb=8000,
+        runtime=840,
+        slurm_partition="main",
+    params:
+        output_dir=HOLDOUT_BASELINE_DIR,
+        manifest_path="logs/baseline_run_log.csv",
+        split_id=HOLDOUT_ID,
+        partition=PARTITION,
+        window_size=WINDOW_SIZE,
+        tail_size=TAIL_SIZE,
+        max_steps_flag=EVAL_MAX_STEPS_FLAG,
+    shell:
+        """
+        set -e
+        export GIT_COMMIT="{GIT_COMMIT}"
+        export PYTHONUNBUFFERED=1
+        python -m src.run_baseline \
+            --algorithm random \
+            --seed {wildcards.seed} \
+            {params.max_steps_flag} \
+            --split_id {params.split_id} \
+            --partition {params.partition} \
+            --window-size {params.window_size} \
+            --tail-size {params.tail_size} \
+            --result-dir {params.output_dir} \
+            --manifest-path {params.manifest_path} \
+            --force \
+            >> {log} 2>&1
+        """
+
+rule baseline_holdout_aggregate:
+    input:
+        heuristics=f"{HOLDOUT_BASELINE_DIR}/.heuristics_complete",
+        random_markers=(
+            expand(
+                f"{HOLDOUT_BASELINE_DIR}/.random_seed_{{seed}}_complete",
+                seed=SEEDS,
+            )
+            if RANDOM_CONTROL else []
+        ),
+    output:
+        baseline_summary=f"{HOLDOUT_BASELINE_DIR}/baseline_summary.csv",
+        baseline_eval_wide=f"{HOLDOUT_BASELINE_DIR}/baseline_eval_wide.csv",
+    log: f"logs/snakemake/{TRACE_NAME}/baseline_holdout_aggregate.log"
+    resources:
+        mem_mb=8000,
+        runtime=60,
+        slurm_partition="main",
+    params:
+        result_dir=HOLDOUT_BASELINE_DIR,
     shell:
         """
         python -m src.baseline_aggregate \
@@ -613,6 +838,10 @@ rule visualise:
         page_trend=f"result/{TRACE_NAME}/stats/page_trend.csv",
         confidence_curves=f"result/{TRACE_NAME}/stats/confidence_curves.csv",
         stats_summary=f"result/{TRACE_NAME}/stats/stats_summary.json",
+        # N3: the bar graphs draw the baselines and the N27 control, so this is a
+        # real data dependency, not just ordering. Without it visualise could run
+        # before baseline_aggregate and silently emit DRL-only bars.
+        baseline_summary=f"result/{TRACE_NAME}/baseline/baseline_summary.csv",
     output:
         marker=touch(f"result/{TRACE_NAME}/.visualise_complete"),
     log: f"logs/snakemake/{TRACE_NAME}/visualise.log"
@@ -624,6 +853,7 @@ rule visualise:
             --trace-name {params.trace} \
             --stats-dir result/{params.trace}/stats \
             --aggregate-dir result/{params.trace}/aggregate \
+            --baseline-summary {input.baseline_summary} \
             --output-dir result/{params.trace} \
             --no-show \
             >> {log} 2>&1

@@ -25,7 +25,7 @@ from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 import scikit_posthocs as sp
-from src.utils import TRAD_ALGORITHMS
+from src.utils import RANDOM_ALGORITHM, TRAD_ALGORITHMS
 
 matplotlib.rcParams.update(
     {
@@ -39,6 +39,13 @@ matplotlib.rcParams.update(
 )
 
 KEY_METRICS = ["avg_waiting", "avg_slowdown", "avg_turnaround", "cpu_utilization", "max_waiting"]
+
+# Metrics whose bar graphs use a log y-axis. These span several orders of
+# magnitude across treatments (a2c's avg_waiting is ~10^5 s while the maskable
+# variants sit at ~10^2), so on a linear axis every well-performing treatment
+# collapses onto the zero line. Utilisation is a 0-1 ratio with a narrow spread
+# and stays linear.
+LOG_SCALE_METRICS = {"avg_waiting", "avg_slowdown", "avg_turnaround", "max_waiting"}
 KEY_METRICS_LABELS = {
     "avg_waiting": "Avg Waiting Time (s)",
     "avg_slowdown": "Avg Slowdown",
@@ -90,12 +97,39 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--no-show", action="store_true", default=False)
 
+    parser.add_argument(
+        "--baseline-summary",
+        default="result/{trace_name}/baseline/baseline_summary.csv",
+        help="baseline_summary.csv to merge into the bar graphs (reviewer item "
+             "N3 — without it the bars show DRL treatments only). Missing file "
+             "warns and degrades to DRL-only rather than failing.",
+    )
+
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+
+def load_baseline_summary(path: Path) -> pd.DataFrame | None:
+    """baseline_summary.csv for the bar graphs, or None with a loud warning.
+
+    The Snakefile always supplies this, so in the pipeline it is effectively
+    required. Degrading instead of failing keeps ad-hoc DRL-only invocations
+    usable — but the warning is deliberately noisy, because the bug this fixes
+    (N3) was invisible precisely because nothing said the baselines were absent.
+    """
+    if not path.exists():
+        print(
+            f"[WARN] baseline_summary.csv not found at {path} — bar graphs will "
+            f"show DRL treatments only, and the baseline/control legend entries "
+            f"will be omitted. Pass --baseline-summary to include them.",
+            flush=True,
+        )
+        return None
+    return pd.read_csv(path)
+
 
 def load_pipeline_data(stats_dir: Path, aggregate_dir: Path) -> dict[str, pd.DataFrame]:
     """Load all CSVs needed for visualisation and tabulation."""
@@ -352,27 +386,122 @@ def draw_confidence_curves(curves_df: pd.DataFrame, plots_dir: Path, alpha: floa
         plt.close(fig)
 
 
-def draw_bar_graphs(seed_summary: pd.DataFrame, plots_dir: Path) -> None:
-    """Draw bar graph per metric: mean ± std per treatment, DRL vs baseline colors."""
+def baseline_bar_rows(baseline_summary: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Baseline rows in per_treatment_mean_std's (treatment_id, mean, std) shape.
 
+    baseline_summary.csv uses algorithm_summary's "{metric}_mean_mean" /
+    "{metric}_mean_std" naming, so it needs translating before it can sit
+    alongside the DRL frame. std is NaN for the deterministic heuristics --
+    correct, and matplotlib simply draws no whisker -- and real for the N27
+    random control, which is the one stochastic baseline.
+    """
+    mean_col, std_col = f"{metric}_mean_mean", f"{metric}_mean_std"
+    if mean_col not in baseline_summary.columns:
+        return pd.DataFrame(columns=["treatment_id", "mean", "std"])
+    out = pd.DataFrame({
+        "treatment_id": baseline_summary["treatment_id"],
+        "mean": baseline_summary[mean_col],
+        # Pre-N27 baseline_summary.csv files have no std column at all.
+        "std": (baseline_summary[std_col] if std_col in baseline_summary.columns
+                else np.nan),
+    })
+    return out.reset_index(drop=True)
+
+
+def classify_treatment(treatment_id: str) -> str:
+    """Bucket a treatment_id for colouring: 'random', 'heuristic' or 'drl'.
+
+    Matches on the algorithm segment before "__" rather than doing a substring
+    test over the whole id. The old `any(b in tid.lower() for b in
+    TRAD_ALGORITHMS)` test was a latent bug: TRAD_ALGORITHMS contains "f_1" and
+    "f_2", which are substrings of plenty of unrelated ids.
+    """
+    algo = treatment_id.split("__")[0].lower()
+    if algo == RANDOM_ALGORITHM:
+        return "random"
+    if algo in TRAD_ALGORITHMS:
+        return "heuristic"
+    return "drl"
+
+
+# Bar colour and legend label per category. The N27 random control gets its own
+# colour deliberately: it is a chance floor rather than a scheduling heuristic,
+# and it is the only non-DRL row carrying a real error bar, so colouring it as a
+# heuristic would misrepresent what it is and what its whisker means.
+BAR_STYLE = {
+    "drl":       ("steelblue", "DRL"),
+    "heuristic": ("coral",     "Heuristic"),
+    "random":    ("#8c8c8c",   "Random (chance floor)"),
+}
+
+
+def draw_bar_graphs(
+    seed_summary: pd.DataFrame,
+    plots_dir: Path,
+    baseline_summary: pd.DataFrame | None = None,
+) -> None:
+    """Bar graph per metric: mean ± std per treatment, DRL vs baselines.
+
+    Reviewer item N3: this used to receive only seed_summary (DRL rows), while
+    the baselines live in baseline_summary.csv and were never merged in -- so
+    every bar rendered steelblue beneath a hardcoded "Baseline" legend entry
+    with nothing behind it. The baselines are now concatenated in, and the
+    legend is built from the categories actually plotted rather than asserted.
+    """
     for metric in KEY_METRICS:
         df = per_treatment_mean_std(seed_summary, metric)
 
-        colors = ["coral" if any(b in tid.lower() for b in TRAD_ALGORITHMS) else "steelblue" for tid in df["treatment_id"]]
+        if baseline_summary is not None:
+            extra = baseline_bar_rows(baseline_summary, metric)
+            if not extra.empty:
+                df = pd.concat([df, extra], ignore_index=True)
+
+        categories = [classify_treatment(tid) for tid in df["treatment_id"]]
+        colors = [BAR_STYLE[c][0] for c in categories]
+
+        # Deterministic heuristics have no across-seed spread, so their std is
+        # NaN. A NaN in yerr propagates through the clip/vstack below and
+        # matplotlib then drops the whole error bar collection, taking the DRL
+        # whiskers with it. Zero is the honest value for a single deterministic
+        # run: no whisker is drawn, and the bars that do have spread keep theirs.
+        spread = df["std"].fillna(0.0)
+
+        # A log axis has no zero to grow bars from, so anchor them half a decade
+        # below the smallest mean and draw each bar as the span floor -> mean.
+        # Only usable when every mean is strictly positive.
+        use_log = metric in LOG_SCALE_METRICS and bool((df["mean"] > 0).all())
+        if use_log:
+            floor = 10.0 ** np.floor(np.log10(df["mean"].min()) - 0.5)
+            heights = df["mean"] - floor
+            # The across-seed std often exceeds the mean (a2c/dqn are that
+            # unstable), which would put the lower whisker at or below zero.
+            # Clip it to the floor so the bar keeps its upper whisker instead of
+            # being dropped by the log transform.
+            lower = np.clip(df["mean"] - spread, floor, None)
+            yerr = np.vstack([df["mean"] - lower, spread])
+        else:
+            floor, heights, yerr = 0.0, df["mean"], spread
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        ax.bar(df["treatment_id"], df["mean"], yerr=df["std"],
+        ax.bar(df["treatment_id"], heights, bottom=floor, yerr=yerr,
                capsize=5, color=colors, edgecolor="black", alpha=0.8)
+
+        if use_log:
+            ax.set_yscale("log")
+            ax.set_ylim(bottom=floor)
 
         ax.set_title(f"{metric}")
         ax.set_xlabel("Treatment ID")
-        ax.set_ylabel(f"Mean {metric}")
+        ax.set_ylabel(f"Mean {metric}" + (" (log scale)" if use_log else ""))
         ax.tick_params(axis='x', rotation=45)
-        ax.grid(axis="y", alpha=0.3)
+        ax.grid(axis="y", alpha=0.3, which="both" if use_log else "major")
 
+        # Built from the categories actually plotted. The previous hardcoded
+        # DRL/Baseline pair is what let the missing-baselines bug (N3) hide: the
+        # legend asserted a coral series that was never drawn.
         legend_elements = [
-            Patch(facecolor="steelblue", label="DRL"),
-            Patch(facecolor="coral", label="Baseline"),
+            Patch(facecolor=BAR_STYLE[c][0], label=BAR_STYLE[c][1])
+            for c in ("drl", "heuristic", "random") if c in set(categories)
         ]
         ax.legend(handles=legend_elements, loc="upper right")
 
@@ -408,7 +537,13 @@ def main() -> None:
         draw_confidence_curves(data["confidence_curves"], plots_dir)
 
     if not args.skip_bar_graphs:
-        draw_bar_graphs(data["seed_summary"], plots_dir)
+        draw_bar_graphs(
+            data["seed_summary"],
+            plots_dir,
+            baseline_summary=load_baseline_summary(
+                Path(args.baseline_summary.format(trace_name=args.trace_name))
+            ),
+        )
 
     if not args.skip_comparison_csv:
         write_comparison_csv(data["algorithm_summary"], tables_dir)

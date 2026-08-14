@@ -174,6 +174,114 @@ class MaskableA2C(OnPolicyAlgorithm):
             raise ValueError(f"All-false action mask for env indices {bad}")
         return masks
 
+    def _report_policy_breakdown(self, obs_tensor, action_masks) -> None:
+        """Print why the action distribution stopped being a distribution.
+
+        Called only from collect_rollouts' except branch, so it costs nothing
+        on the happy path. Every section is guarded independently: this runs
+        while the run is already failing, and a diagnostic that raised on its
+        own would destroy the traceback it exists to explain.
+
+        The distinction it draws is the one torch's message hides. A
+        (n_envs, 513) probs tensor prints only its corner columns, so
+        "invalid values" covers both a NaN somewhere in the elided middle --
+        which means the head or its inputs went non-finite -- and rows that
+        are finite but no longer sum to 1, which is a precision/saturation
+        story instead. Those have different fixes, so name which one it is.
+        """
+        HUGE_NEG = -1e8  # sb3_contrib MaskableCategorical's masked-logit fill
+
+        def stats(name: str, tensor) -> None:
+            t = tensor.detach().float()
+            finite = th.isfinite(t)
+            n_bad = int((~finite).sum())
+            line = f"    {name}: shape={tuple(t.shape)} non_finite={n_bad}/{t.numel()}"
+            if int(finite.sum()):
+                line += f" min={float(t[finite].min()):.6g} max={float(t[finite].max()):.6g}"
+            if n_bad:
+                line += (f" nan={int(th.isnan(t).sum())}"
+                         f" +inf={int(th.isposinf(t).sum())}"
+                         f" -inf={int(th.isneginf(t).sum())}")
+            print(line, flush=True)
+
+        print(f"\n[MaskableA2C] policy breakdown at num_timesteps={self.num_timesteps}",
+              flush=True)
+
+        try:
+            if isinstance(obs_tensor, dict):
+                for key in sorted(obs_tensor):
+                    stats(f"obs[{key}]", obs_tensor[key])
+            else:
+                stats("obs", obs_tensor)
+        except Exception as exc:
+            print(f"    obs: unavailable ({exc})", flush=True)
+
+        try:
+            if action_masks is None:
+                print("    masks: none (use_masking=False)", flush=True)
+            else:
+                m = th.as_tensor(np.asarray(action_masks), dtype=th.bool)
+                valid = m.reshape(m.shape[0], -1).sum(-1)
+                print(f"    masks: valid actions per env min={int(valid.min())} "
+                      f"max={int(valid.max())} of {m.shape[-1]}", flush=True)
+        except Exception as exc:
+            print(f"    masks: unavailable ({exc})", flush=True)
+
+        try:
+            bad = [n for n, p in self.policy.named_parameters() if not th.isfinite(p).all()]
+            print(f"    params: {len(bad)} non-finite tensor(s)"
+                  + (f", e.g. {bad[:5]}" if bad else ""), flush=True)
+        except Exception as exc:
+            print(f"    params: unavailable ({exc})", flush=True)
+
+        try:
+            features = self.policy.extract_features(obs_tensor)
+            if self.policy.share_features_extractor:
+                latent_pi, _ = self.policy.mlp_extractor(features)
+            else:
+                latent_pi = self.policy.mlp_extractor.forward_actor(features[0])
+            stats("latent_pi", latent_pi)
+
+            logits = self.policy.action_net(latent_pi)
+            stats("logits(raw)", logits)
+
+            if action_masks is not None:
+                masks = th.as_tensor(np.asarray(action_masks), dtype=th.bool,
+                                     device=logits.device).reshape(logits.shape)
+                logits = th.where(masks, logits,
+                                  th.tensor(HUGE_NEG, dtype=logits.dtype, device=logits.device))
+                stats("logits(masked)", logits)
+
+            probs = th.softmax(logits, dim=-1)
+            stats("probs", probs)
+            row_sum = probs.sum(-1)
+            stats("probs.sum(-1)", row_sum)
+
+            # Which ENV, not which action. torch prints only the corner rows of
+            # a (20, 513) tensor, so a failure confined to middle rows -- i.e.
+            # to particular envs -- is invisible in the crash message while
+            # looking like a whole-policy collapse. Naming the rows separates
+            # "one env fed the net something bad" from "the weights are gone".
+            bad_rows = (~th.isfinite(probs)).any(-1).nonzero().flatten().tolist()
+            if bad_rows:
+                print(f"    non-finite rows (env indices): {bad_rows} "
+                      f"of {probs.shape[0]}", flush=True)
+
+            deviation = float((row_sum - 1.0).abs().max())
+            if not bool(th.isfinite(probs).all()):
+                verdict = "NON-FINITE probs -- the head or its inputs went NaN/inf"
+            elif deviation >= 1e-6:
+                verdict = (f"SUM DEVIATION -- probs finite but max|sum-1|={deviation:.3e} "
+                           f"exceeds torch's 1e-6 Simplex tolerance")
+            else:
+                verdict = ("probs valid on recompute -- failure did not reproduce here, "
+                           "suspect an intermittent//transient state")
+            print(f"    VERDICT: {verdict}", flush=True)
+        except Exception as exc:
+            print(f"    head: could not recompute ({exc})", flush=True)
+
+        print("", flush=True)
+
     def _setup_model(self) -> None:
             self._setup_lr_schedule()
             self.set_random_seed(self.seed)
@@ -259,7 +367,24 @@ class MaskableA2C(OnPolicyAlgorithm):
                 else:
                     action_masks = None                
 
-                actions, values, log_probs = self.policy(obs_tensor, action_masks=action_masks)
+                try:
+                    actions, values, log_probs = self.policy(obs_tensor, action_masks=action_masks)
+                except ValueError:
+                    # MaskableCategorical's Simplex() check fires here, and
+                    # torch's message elides all but the corner columns of a
+                    # (n_envs, 513) probs tensor, so it cannot distinguish a
+                    # hidden NaN from probabilities that simply stopped summing
+                    # to 1 -- and those want different fixes. Recompute the head
+                    # and report what actually broke. Costs nothing on the happy
+                    # path: this runs once, on the way out.
+                    #
+                    # This is what resolved the crash: it showed everything
+                    # finite, which ruled out divergence and pointed at the
+                    # sb3-contrib cache bug fixed in src/sb3_compat.py. Kept as a
+                    # regression tripwire -- if it ever fires again, the verdict
+                    # line says immediately whether the cause is a new one.
+                    self._report_policy_breakdown(obs_tensor, action_masks)
+                    raise
 
             actions = actions.cpu().numpy()
             new_obs, rewards, dones, infos = env.step(actions)
@@ -344,10 +469,14 @@ class MaskableA2C(OnPolicyAlgorithm):
             # Advantage normalization. NOT part of stock SB3 A2C (which defaults
             # normalize_advantage=False). Over A2C's tiny n_steps rollout, once the
             # value fits and true advantages are ~0, normalizing divides near-zero
-            # residuals by a near-zero std and rescales pure noise to unit scale,
-            # which drove maskable_a2c to NaN logits (Simplex() crash). Default is
-            # now False to match canonical A2C; kept behind the flag for large-batch
-            # configs where normalization is safe.
+            # residuals by a near-zero std and rescales pure noise to unit scale.
+            # Default is False to match canonical A2C; kept behind the flag for
+            # large-batch configs where normalization is safe.
+            #
+            # This was once blamed for maskable_a2c's Simplex() crash. It was not
+            # the cause -- that is a stale probs cache in the pinned sb3-contrib,
+            # see src/sb3_compat.py. False remains the right default on its own
+            # merits, but it is not a crash fix.
             advantages = rollout_data.advantages
             if self.normalize_advantage:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)

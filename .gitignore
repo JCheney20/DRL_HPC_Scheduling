@@ -19,3 +19,6 @@ visualise_instructions.md
 # Python / Nix
 __pycache__/
 .direnv/
+
+# Agent worktrees
+.claude/

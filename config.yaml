@@ -40,7 +40,15 @@ trad_algorithms:
   - "unicep"
   # - "f_1"
   # - "f_2"
-  
+
+# Uniform-random-over-valid-actions control (reviewer item N27). Not a
+# heuristic and deliberately not in trad_algorithms: it runs the RL MDP, not
+# HPCsim.run(), so that it controls for policy quality and nothing else. It is
+# the only stochastic baseline, so it reuses `seeds` above (one job per seed)
+# and is the only baseline row reported as mean +/- std.
+# Evaluation only -- no training, no GPU. See src/random_control.py.
+random_control: true
+
 # -- Allocator -----------------------------------------------------------------
 allocators:
   - "best_fit"

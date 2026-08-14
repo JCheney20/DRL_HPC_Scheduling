@@ -393,17 +393,39 @@ def build_model(
     if "ppo" in algorithm.lower():
         model_kwargs["n_epochs"] = n_epochs
 
-    # A2C entropy floor (experiment hyperparameter). On the ~230M-param
-    # [4096,2048,1024] net the default ent_coef=0.0 let maskable_a2c saturate to
-    # ~0 entropy and, together with a non-standard advantage normalization, diverge
-    # to non-finite logits (MaskableCategorical Simplex() crash). ent_coef=0.01
-    # (SB3's own A2C example value) keeps entropy up; this is a tuning choice for
-    # our config, so it lives here with the other hyperparameters rather than in
-    # the algorithm class. The paired fix — the real driver — is at its source:
-    # a2c_mask.py now defaults normalize_advantage=False (canonical A2C), so no
-    # override is needed here. A2C-only (PPO/DQN have no analogue).
-    if "a2c" in algorithm.lower():
-        model_kwargs["ent_coef"] = 0.01
+    # NO ent_coef override — every algorithm takes SB3's default 0.0.
+    #
+    # There used to be an A2C-only `ent_coef = 0.01` here, and it is deliberately
+    # gone (reviewer item A2C-1). Removing it was the right call, but the reasoning
+    # first recorded here was wrong on every point, so it is restated.
+    #
+    # The crash it was added for is not divergence. maskable_a2c does die with a
+    # MaskableCategorical Simplex() violation, but at the crash point the policy
+    # weights, observations, latents and logits are all finite and the masked
+    # probabilities recompute to a valid distribution. The tensor torch rejects is
+    # a stale probs cache inside sb3-contrib, not anything this policy produced;
+    # src/sb3_compat.py explains it in full and fixes it. Neither ent_coef nor
+    # normalize_advantage nor saturation causes or prevents that failure.
+    #
+    # So the two claims that used to justify this block do not hold:
+    #   - "the actual driver was a non-standard normalize_advantage=True" — it was
+    #     not. a2c_mask.py:112 still defaults normalize_advantage=False, which is
+    #     canonical A2C and defensible on its own merits, but it is not a crash fix
+    #     and must not be cited as one.
+    #   - "N19: three of four A2C arms ended near-uniform, so an entropy bonus
+    #     pushes the way the failure already went" — N19 measured runs that HAD the
+    #     bonus. It was evidence about ent_coef=0.01, not an independent argument
+    #     against it.
+    #
+    # The reasons to keep ent_coef at 0.0 are these instead:
+    #   - Measured: with ent_coef=0.01, all 20 A2C runs finish at 99.8-100% of the
+    #     ln(513)=6.240 entropy ceiling — still essentially uniform. The entropy
+    #     term (~0.0624) outweighs policy_loss (1e-9 to 1e-3) by roughly 600x, so
+    #     the bonus dominates the objective and the policy never commits.
+    #   - It applied to A2C ONLY, while PPO and DQN kept SB3's 0.0, so any "A2C is
+    #     temperamental, PPO is not" comparison was contaminated by a hyperparameter
+    #     this study itself introduced (reviewer item N26a). Removing it makes the
+    #     six-treatment comparison a controlled one.
 
     return algo_class("MultiInputPolicy", env, **model_kwargs)
 

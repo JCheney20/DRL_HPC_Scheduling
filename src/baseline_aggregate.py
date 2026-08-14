@@ -75,17 +75,36 @@ def load_and_validate(path: Path, strict: bool) -> pd.DataFrame | None:
 
 def build_baseline_summary(eval_wide: pd.DataFrame) -> pd.DataFrame:
     """
-    One row per treatment_id (== one row per algorithm, since baselines have
-    no masking variants and no seeds). Column names mirror
-    algorithm_summary.csv's "{metric}_mean_mean" convention -- not because
-    any averaging happens here, but so downstream plotting code that already
-    expects that column shape can read this file unmodified.
+    One row per treatment_id. Column names mirror algorithm_summary.csv's
+    "{metric}_mean_mean" / "{metric}_mean_std" convention so downstream
+    plotting and table code that already expects that column shape can read
+    this file unmodified.
+
+    Most baselines are deterministic heuristics with a single seedless row, so
+    grouping is a no-op for them: the mean of one value is that value, and its
+    std is NaN (ddof=1 on n=1) -- which is the correct rendering, since
+    build_results_data's fmt_mean_std omits the +/- term on NaN. The grouping
+    exists for the one baseline that is stochastic: the N27
+    uniform-random-over-valid-actions control, which contributes one row per
+    seed and whose spread across seeds is the whole point of running it. A
+    control reported without its variance could not answer the question N27
+    asks (is a masked-but-unlearned policy distinguishable from MaskablePPO?),
+    so the std column is load-bearing rather than decorative.
     """
-    keep_cols = ["treatment_id", "algorithm", "use_masking", "split_id"] + CORE_METRICS
-    summary = eval_wide[keep_cols].copy()
-    rename_map = {metric: f"{metric}_mean_mean" for metric in CORE_METRICS}
-    summary = summary.rename(columns=rename_map)
-    return summary
+    group_keys = ["treatment_id", "algorithm", "use_masking", "split_id"]
+    grouped = eval_wide.groupby(group_keys, dropna=False)[CORE_METRICS]
+    means = grouped.mean().rename(columns={m: f"{m}_mean_mean" for m in CORE_METRICS})
+    stds = grouped.std(ddof=1).rename(columns={m: f"{m}_mean_std" for m in CORE_METRICS})
+    # n_seeds distinguishes "deterministic, one run" from "10 stochastic runs"
+    # in the file itself, so a reader does not have to infer it from a NaN std.
+    n_seeds = grouped.size().rename("n_seeds")
+
+    summary = pd.concat([means, stds, n_seeds], axis=1).reset_index()
+    # Interleave so each metric's mean and std sit together, then the ids.
+    ordered = group_keys + ["n_seeds"]
+    for metric in CORE_METRICS:
+        ordered += [f"{metric}_mean_mean", f"{metric}_mean_std"]
+    return summary[ordered]
 
 
 def main() -> None:
@@ -109,14 +128,24 @@ def main() -> None:
         sys.exit(1)
 
     eval_wide = pd.concat(frames, ignore_index=True)
-    duplicates = eval_wide[eval_wide.duplicated(subset=["treatment_id", "split_id"], keep=False)]
+    # Seed is part of the key. It is empty for the deterministic heuristics --
+    # so (treatment_id, split_id, "") still catches a genuine duplicate run of
+    # one of those -- and distinct for each seed of the N27 random control,
+    # whose 10 rows are the intended output rather than a collision.
+    dup_keys = ["treatment_id", "split_id", "seed"]
+    duplicates = eval_wide[eval_wide.duplicated(subset=dup_keys, keep=False)]
     if not duplicates.empty:
-        raise ValueError(f"Duplicate (treatment_id, split_id) rows found:\n{duplicates}")
+        raise ValueError(f"Duplicate (treatment_id, split_id, seed) rows found:\n{duplicates}")
 
     summary = build_baseline_summary(eval_wide)
     write_csv(eval_wide, output_path.parent / "baseline_eval_wide.csv")
     write_csv(summary, output_path)
-    print(f"[OK] {len(summary)} baseline algorithm(s) -> wrote {output_path}")
+    seeded = summary[summary["n_seeds"] > 1]
+    print(
+        f"[OK] {len(summary)} baseline algorithm(s) from {len(eval_wide)} run(s) "
+        f"-> wrote {output_path}"
+        + (f" ({len(seeded)} stochastic, seed-averaged)" if not seeded.empty else "")
+    )
 
 
 if __name__ == "__main__":
